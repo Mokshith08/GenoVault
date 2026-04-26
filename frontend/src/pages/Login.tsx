@@ -1,0 +1,139 @@
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Eye, EyeOff, Loader2, Mail, Lock, ShieldCheck, Smartphone } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { AuthLayout } from "@/components/auth/AuthLayout";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
+import { useAuth } from "@/contexts/AuthContext";
+
+const Login = () => {
+  const navigate = useNavigate();
+  const { login } = useAuth();
+  const [step, setStep] = useState<"form" | "otp">("form");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+  const [loading, setLoading] = useState(false);
+
+  const validate = () => {
+    const e: typeof errors = {};
+    if (!email) e.email = "Email is required";
+    if (!password) e.password = "Password is required";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const onSubmitForm = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    if (!validate()) return;
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      setStep("otp");
+      toast.info("OTP sent to your email (use any 6 digits to demo).");
+    }, 600);
+  };
+
+  const submitOtp = () => {
+    if (otp.length !== 6) {
+      toast.error("Enter the 6-digit code");
+      return;
+    }
+    setLoading(true);
+    setTimeout(() => {
+      const role = email.toLowerCase().includes("research") ? "researcher" : "owner";
+      login({ name: email.split("@")[0], email, role });
+      toast.success("Welcome back!");
+      navigate(role === "researcher" ? "/researcher" : "/dashboard");
+    }, 700);
+  };
+
+  return (
+    <AuthLayout
+      title={step === "form" ? "Welcome back" : "Two-Step Verification"}
+      subtitle={step === "form" ? "Sign in to access your secure vault." : `We sent a 6-digit code to ${email}`}
+      footer={step === "form" ? <>Don't have an account? <Link to="/register" className="text-primary font-medium hover:underline">Create one</Link></> : <button onClick={() => setStep("form")} className="text-primary hover:underline">Back</button>}
+    >
+      {step === "form" ? (
+        <form onSubmit={onSubmitForm} className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input id="email" type="email" placeholder="you@institution.org" value={email} onChange={e => setEmail(e.target.value)} className="pl-9 h-11" />
+            </div>
+            {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <a href="#" className="text-xs text-muted-foreground hover:text-primary">Forgot?</a>
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input id="password" type={show ? "text" : "password"} placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} className="pl-9 pr-10 h-11" />
+              <button type="button" onClick={() => setShow(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
+          </div>
+
+          <Button type="submit" disabled={loading} className="w-full h-11 bg-gradient-primary hover:opacity-90 shadow-elegant">
+            {loading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Signing in...</> : "Sign in"}
+          </Button>
+
+          <p className="text-[11px] text-center text-muted-foreground">
+            Tip: include "research" in your email to demo the Researcher dashboard.
+          </p>
+        </form>
+      ) : (
+        <div className="space-y-6">
+          <div className="flex justify-center">
+            <div className="h-14 w-14 rounded-2xl bg-gradient-primary shadow-elegant flex items-center justify-center">
+              <ShieldCheck className="h-7 w-7 text-primary-foreground" />
+            </div>
+          </div>
+          <div className="flex justify-center">
+            <InputOTP maxLength={6} value={otp} onChange={setOtp}>
+              <InputOTPGroup>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <InputOTPSlot key={i} index={i} className="h-12 w-12 text-lg" />
+                ))}
+              </InputOTPGroup>
+            </InputOTP>
+          </div>
+          <Button onClick={submitOtp} disabled={loading} className="w-full h-11 bg-gradient-primary hover:opacity-90 shadow-elegant">
+            {loading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Verifying...</> : "Verify & Sign in"}
+          </Button>
+
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border" />
+            </div>
+            <div className="relative flex justify-center text-[10px] uppercase">
+              <span className="bg-background px-2 text-muted-foreground">Or</span>
+            </div>
+          </div>
+          
+          <Button variant="outline" type="button" onClick={submitOtp} disabled={loading} className="w-full h-11">
+            <Smartphone className="h-4 w-4 mr-2" />
+            Verify with Authenticator App
+          </Button>
+
+          <p className="text-xs text-center text-muted-foreground mt-2">
+            Didn't get it? <button className="text-primary hover:underline">Resend code</button>
+          </p>
+        </div>
+      )}
+    </AuthLayout>
+  );
+};
+
+export default Login;
