@@ -1,4 +1,5 @@
 import { Bell, Search, User, Settings, LogOut, ChevronDown } from "lucide-react";
+import { PinSetupModal } from "@/components/auth/PinSetupModal";
 import { Outlet, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -27,6 +28,8 @@ export const ResearcherLayout = () => {
 
   return (
     <SidebarProvider>
+      {/* PIN setup modal – shown to new users who have no PIN yet */}
+      <PinSetupModal />
       <div className="min-h-screen flex w-full bg-muted/30">
         <ResearcherSidebar />
 

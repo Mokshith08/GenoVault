@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Bell,
   Moon,
@@ -16,6 +16,9 @@ import {
   EyeOff,
   Save,
   ChevronRight,
+  KeyRound,
+  CheckCircle2,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +34,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useToast } from "@/hooks/use-toast";
+import { PinInput } from "@/components/ui/PinInput";
 
 // ── Reusable section wrapper ──────────────────────────────────────────────────
 function SettingsSection({
@@ -89,9 +93,10 @@ function ToggleRow({
   );
 }
 
+
 // ── Main Settings page ────────────────────────────────────────────────────────
 export default function Settings() {
-  const { user, logout } = useAuth();
+  const { user, logout, pin, setPin } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -119,6 +124,42 @@ export default function Settings() {
   const [language, setLanguage] = useState("en");
   const [dateFormat, setDateFormat] = useState("DD/MM/YYYY");
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
+
+  // ── PIN change ─────────────────────────────────────────────────
+  type PinStep = "idle" | "verify" | "new" | "confirm" | "done";
+  const [pinStep, setPinStep] = useState<PinStep>("idle");
+  const [pinVerify, setPinVerify] = useState<string[]>(Array(6).fill(""));
+  const [pinNew, setPinNew]       = useState<string[]>(Array(6).fill(""));
+  const [pinConfirm, setPinConfirm] = useState<string[]>(Array(6).fill(""));
+  const [pinShake, setPinShake] = useState(false);
+
+  const triggerShake = () => { setPinShake(true); setTimeout(() => setPinShake(false), 500); };
+
+  const handleVerifyPin = () => {
+    if (pinVerify.join("").length < 6) { toast({ title: "Enter all 6 digits" }); return; }
+    if (pinVerify.join("") !== (pin ?? "")) { triggerShake(); toast({ title: "Incorrect current PIN", variant: "destructive" }); setPinVerify(Array(6).fill("")); return; }
+    setPinStep("new"); setPinVerify(Array(6).fill(""));
+  };
+
+  const handleNewPin = () => {
+    if (pinNew.join("").length < 6) { toast({ title: "Enter all 6 digits" }); return; }
+    setPinStep("confirm");
+  };
+
+  const handleConfirmPin = () => {
+    if (pinConfirm.join("").length < 6) { toast({ title: "Enter all 6 digits" }); return; }
+    if (pinNew.join("") !== pinConfirm.join("")) {
+      triggerShake(); toast({ title: "PINs don't match", variant: "destructive" });
+      setPinConfirm(Array(6).fill("")); return;
+    }
+    setPin(pinNew.join(""));
+    setPinStep("done");
+    setPinNew(Array(6).fill("")); setPinConfirm(Array(6).fill(""));
+    toast({ title: "Security PIN updated successfully ✓" });
+    setTimeout(() => setPinStep("idle"), 2000);
+  };
+
+  const cancelPin = () => { setPinStep("idle"); setPinVerify(Array(6).fill("")); setPinNew(Array(6).fill("")); setPinConfirm(Array(6).fill(""));  };
 
   // ── Session ────────────────────────────────────────────────────
   const MOCK_SESSIONS = [
@@ -352,7 +393,93 @@ export default function Settings() {
         </div>
       </SettingsSection>
 
-      {/* ── 4. Active Sessions ── */}
+      {/* ── 4. Security PIN ── */}
+      <SettingsSection title="Security PIN" icon={<KeyRound className="h-4 w-4" />} delay={0.18}>
+        <div className="space-y-4">
+          {/* 2FA toggle */}
+          <ToggleRow
+            id="pin-2fa"
+            label="Two-factor auth on PIN actions"
+            description="Require email 2FA before changing your security PIN."
+            checked={privacy.twoFactorOnLogin}
+            onCheckedChange={(v) => setPrivacy((p) => ({ ...p, twoFactorOnLogin: v }))}
+          />
+
+          {/* Info row */}
+          <div className="flex items-center justify-between px-3 py-3 rounded-lg border border-border bg-muted/20 text-sm">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <KeyRound className="h-4 w-4" />
+              <span>Security PIN</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono tracking-widest text-xs text-muted-foreground">••••••</span>
+              {pinStep === "idle" && (
+                <button
+                  onClick={() => setPinStep("verify")}
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className="h-3 w-3" /> Change
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Inline change-PIN steps */}
+          <AnimatePresence mode="wait">
+            {pinStep === "verify" && (
+              <motion.div key="verify" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                className="rounded-xl border border-border bg-muted/10 p-5 space-y-4"
+              >
+                <p className="text-sm font-medium">Step 1 of 3 — Verify current PIN</p>
+                <PinInput value={pinVerify} onChange={setPinVerify} shake={pinShake} autoFocus label="Current PIN" />
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1" onClick={cancelPin}>Cancel</Button>
+                  <Button size="sm" className="flex-1 bg-gradient-primary hover:opacity-90" onClick={handleVerifyPin} disabled={pinVerify.join("").length < 6}>Next</Button>
+                </div>
+              </motion.div>
+            )}
+
+            {pinStep === "new" && (
+              <motion.div key="new" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                className="rounded-xl border border-border bg-muted/10 p-5 space-y-4"
+              >
+                <p className="text-sm font-medium">Step 2 of 3 — Enter new PIN</p>
+                <PinInput value={pinNew} onChange={setPinNew} autoFocus label="New PIN" />
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1" onClick={cancelPin}>Cancel</Button>
+                  <Button size="sm" className="flex-1 bg-gradient-primary hover:opacity-90" onClick={handleNewPin} disabled={pinNew.join("").length < 6}>Next</Button>
+                </div>
+              </motion.div>
+            )}
+
+            {pinStep === "confirm" && (
+              <motion.div key="confirm" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                className="rounded-xl border border-border bg-muted/10 p-5 space-y-4"
+              >
+                <p className="text-sm font-medium">Step 3 of 3 — Confirm new PIN</p>
+                <PinInput value={pinConfirm} onChange={setPinConfirm} shake={pinShake} autoFocus label="Confirm new PIN" />
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1" onClick={cancelPin}>Cancel</Button>
+                  <Button size="sm" className="flex-1 bg-gradient-primary hover:opacity-90" onClick={handleConfirmPin} disabled={pinConfirm.join("").length < 6}>
+                    <Save className="h-3.5 w-3.5 mr-1" /> Save PIN
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+
+            {pinStep === "done" && (
+              <motion.div key="done" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+                className="rounded-xl border border-success/30 bg-success/10 p-4 flex items-center gap-3"
+              >
+                <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
+                <p className="text-sm font-medium text-success">PIN updated successfully!</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </SettingsSection>
+
+      {/* ── 5. Active Sessions ── */}
       <SettingsSection title="Active Sessions" icon={<Monitor className="h-4 w-4" />} delay={0.2}>
         <div className="space-y-2">
           {sessions.map((s) => (
