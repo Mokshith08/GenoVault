@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (store in cloud in production)
+uploads/
+
+# Build artifacts
+*.js.map

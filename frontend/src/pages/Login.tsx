@@ -19,6 +19,8 @@ const Login = () => {
   const [otp, setOtp] = useState("");
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const [loading, setLoading] = useState(false);
+  // Store verified user data between steps
+  const [verifiedUser, setVerifiedUser] = useState<{ name: string; email: string; role: "owner" | "researcher"; token: string } | null>(null);
 
   const validate = () => {
     const e: typeof errors = {};
@@ -28,29 +30,66 @@ const Login = () => {
     return Object.keys(e).length === 0;
   };
 
-  const onSubmitForm = (ev: React.FormEvent) => {
+  const onSubmitForm = async (ev: React.FormEvent) => {
     ev.preventDefault();
     if (!validate()) return;
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      // Step 1a — Verify credentials
+      const res = await fetch("http://localhost:5000/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Login failed");
+
+      // Store user data for after OTP
+      setVerifiedUser({ name: data.user.name, email: data.user.email, role: data.user.role, token: data.token });
+
+      // Step 1b — Send OTP to their email
+      const otpRes = await fetch("http://localhost:5000/api/otp/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const otpData = await otpRes.json();
+      if (!otpRes.ok) throw new Error(otpData.message || "Failed to send OTP");
+
       setStep("otp");
-      toast.info("OTP sent to your email (use any 6 digits to demo).");
-    }, 600);
+      toast.success(`OTP sent to ${email}`);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const submitOtp = () => {
-    if (otp.length !== 6) {
-      toast.error("Enter the 6-digit code");
-      return;
-    }
+  const submitOtp = async () => {
+    if (otp.length !== 6) { toast.error("Enter all 6 digits"); return; }
+    if (!verifiedUser) return;
     setLoading(true);
-    setTimeout(() => {
-      const role = email.toLowerCase().includes("research") ? "researcher" : "owner";
-      login({ name: email.split("@")[0], email, role });
+    try {
+      // Step 2 — Verify OTP with backend
+      const res = await fetch("http://localhost:5000/api/otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verifiedUser.email, code: otp }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "OTP verification failed");
+
+      // OTP correct — complete login
+      localStorage.setItem("genovault-token", verifiedUser.token);
+      login({ name: verifiedUser.name, email: verifiedUser.email, role: verifiedUser.role });
       toast.success("Welcome back!");
-      navigate(role === "researcher" ? "/researcher" : "/dashboard");
-    }, 700);
+      navigate(verifiedUser.role === "researcher" ? "/researcher" : "/dashboard");
+    } catch (err: any) {
+      toast.error(err.message);
+      setOtp(""); // Clear wrong OTP
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -89,9 +128,7 @@ const Login = () => {
             {loading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Signing in...</> : "Sign in"}
           </Button>
 
-          <p className="text-[11px] text-center text-muted-foreground">
-            Tip: include "research" in your email to demo the Researcher dashboard.
-          </p>
+
         </form>
       ) : (
         <div className="space-y-6">

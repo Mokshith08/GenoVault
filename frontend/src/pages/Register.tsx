@@ -33,28 +33,32 @@ const Register = () => {
     return Object.keys(e).length === 0;
   };
 
-  const submitForm = (ev: React.FormEvent) => {
+  const submitForm = async (ev: React.FormEvent) => {
     ev.preventDefault();
     if (!validate()) return;
     setLoading(true);
-    setTimeout(() => {
+    try {
+      const res = await fetch("http://localhost:5000/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password, role }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Registration failed");
+      toast.success("Account created! Please log in.");
+      navigate("/login");
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
       setLoading(false);
-      setStep("otp");
-      toast.info("OTP sent to your email (use any 6 digits to demo).");
-    }, 600);
+    }
   };
 
+  // OTP step kept for future email verification — currently bypassed
   const submitOtp = () => {
-    if (otp.length !== 6) {
-      toast.error("Enter the 6-digit code");
-      return;
-    }
-    setLoading(true);
-    setTimeout(() => {
-      login({ name, email, role });
-      toast.success("Account created");
-      navigate(role === "researcher" ? "/researcher" : "/dashboard");
-    }, 600);
+    if (otp.length !== 6) { toast.error("Enter the 6-digit code"); return; }
+    login({ name, email, role });
+    navigate(role === "researcher" ? "/researcher" : "/dashboard");
   };
 
   return (
