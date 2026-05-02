@@ -56,6 +56,18 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    // TOTP MFA – the raw base32 secret is never returned by default
+    mfa_secret: {
+      type: String,
+      select: false,
+    },
+
+    // True only after the user successfully verifies their first TOTP code
+    mfa_enabled: {
+      type: Boolean,
+      default: false,
+    },
+
     // Timestamps for record-keeping
     lastLogin: {
       type: Date,
@@ -100,6 +112,7 @@ userSchema.set("toJSON", {
   transform: (_, ret) => {
     delete ret.password;
     delete ret.pin;
+    delete ret.mfa_secret; // Never expose raw TOTP secret
     delete ret.__v;
     return ret;
   },

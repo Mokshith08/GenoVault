@@ -54,10 +54,16 @@ const register = async (req, res) => {
     // ── 3. Create user (password hashed by pre-save hook) ────
     const user = await User.create({ name, email, password, role });
 
-    // ── 4. Respond (no token on register — force explicit login) ──
+    // ── 4. Issue a short-lived setup token so the client can call
+    //    /auth/setup-mfa immediately without a separate login step.
+    //    This token expires in 10 minutes – it is only for MFA setup.
+    const setupToken = generateToken(user._id, user.role);
+
+    // ── 5. Respond ──────────────────────────────────────────
     return res.status(201).json({
       success: true,
-      message: "Account created successfully. Please log in.",
+      message: "Account created successfully. Please set up MFA.",
+      setupToken, // Short-lived – front-end uses this only for MFA setup
       user: {
         id: user._id,
         name: user.name,
@@ -140,6 +146,7 @@ const login = async (req, res) => {
         email: user.email,
         role: user.role,
         pinSet: user.pinSet,
+        mfa_enabled: user.mfa_enabled, // ← frontend uses this to pick OTP vs TOTP flow
       },
     });
   } catch (err) {

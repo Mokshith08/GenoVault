@@ -54,6 +54,18 @@ const authLimiter = rateLimit({
   },
 });
 
+// MFA verify limiter – TOTP codes are 6-digit; must be very strict
+const mfaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5, // Only 5 TOTP verify attempts per 15 min per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many MFA verification attempts. Please try again in 15 minutes.",
+  },
+});
+
 // ── 4. Body parsers ───────────────────────────────────────────
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
@@ -65,8 +77,9 @@ if (process.env.NODE_ENV === "development") {
 
 // ── 6. Apply rate limiters ────────────────────────────────────
 app.use("/api/", apiLimiter);
-app.use("/api/auth/login", authLimiter);
-app.use("/api/auth/register", authLimiter);
+app.use("/api/auth/login",      authLimiter);
+app.use("/api/auth/register",   authLimiter);
+app.use("/api/auth/verify-mfa", mfaLimiter); // Strict – brute-force guard
 
 // ── 7. Routes ─────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);

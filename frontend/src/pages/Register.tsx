@@ -1,28 +1,28 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Eye, EyeOff, Loader2, Mail, Lock, User, FlaskConical, Database, ShieldCheck, Smartphone } from "lucide-react";
+import { Eye, EyeOff, Loader2, Mail, Lock, User, FlaskConical, Database } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthLayout } from "@/components/auth/AuthLayout";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
-import { useAuth } from "@/contexts/AuthContext";
+import { MfaSetupModal } from "@/components/auth/MfaSetupModal";
 import type { Role } from "@/contexts/AuthContext";
 
 const Register = () => {
   const navigate = useNavigate();
-  const { login } = useAuth();
-  const [step, setStep] = useState<"form" | "otp">("form");
   const [role, setRole] = useState<Role>("owner");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
-  const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // MFA modal state – setupToken is kept only in memory, never persisted
+  const [setupToken, setSetupToken] = useState<string | null>(null);
+  const [pendingRole, setPendingRole] = useState<Role>("owner");
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -45,8 +45,11 @@ const Register = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Registration failed");
-      toast.success("Account created! Please log in.");
-      navigate("/login");
+
+      // Store setup token in memory and open MFA modal
+      setPendingRole(role);
+      setSetupToken(data.setupToken);
+      toast.success("Account created! Set up two-factor authentication.");
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -54,20 +57,33 @@ const Register = () => {
     }
   };
 
-  // OTP step kept for future email verification — currently bypassed
-  const submitOtp = () => {
-    if (otp.length !== 6) { toast.error("Enter the 6-digit code"); return; }
-    login({ name, email, role });
-    navigate(role === "researcher" ? "/researcher" : "/dashboard");
+  // Called by MfaSetupModal on successful TOTP verification
+  const handleMfaSuccess = () => {
+    setSetupToken(null);
+    toast.success("MFA enabled! Please log in.");
+    navigate("/login");
   };
 
   return (
-    <AuthLayout
-      title={step === "form" ? "Create your vault" : "Verify your email"}
-      subtitle={step === "form" ? "Join GenoVault in seconds." : `We sent a 6-digit code to ${email}`}
-      footer={step === "form" ? <>Have an account? <Link to="/login" className="text-primary font-medium hover:underline">Sign in</Link></> : <button onClick={() => setStep("form")} className="text-primary hover:underline">Back</button>}
-    >
-      {step === "form" ? (
+    <>
+      {/* MFA Modal — rendered above the form, auto-appears after signup */}
+      {setupToken && (
+        <MfaSetupModal
+          setupToken={setupToken}
+          onSuccess={handleMfaSuccess}
+          onSkip={() => {
+            setSetupToken(null);
+            toast.info("MFA skipped. You can enable it later in Settings.");
+            navigate("/login");
+          }}
+        />
+      )}
+
+      <AuthLayout
+        title="Create your vault"
+        subtitle="Join GenoVault in seconds."
+        footer={<>Have an account? <Link to="/login" className="text-primary font-medium hover:underline">Sign in</Link></>}
+      >
         <form onSubmit={submitForm} className="space-y-5">
           <div>
             <Label className="mb-2 block">I am a</Label>
@@ -114,7 +130,7 @@ const Register = () => {
             <Label htmlFor="password">Password</Label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input id="password" type={show ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" className="pl-9 pr-10 h-11" />
+              <Input id="password" type={show ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 8 characters" className="pl-9 pr-10 h-11" />
               <button type="button" onClick={() => setShow(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                 {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -126,46 +142,8 @@ const Register = () => {
             {loading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Creating...</> : "Create account"}
           </Button>
         </form>
-      ) : (
-        <div className="space-y-6">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-2xl bg-gradient-primary shadow-elegant flex items-center justify-center">
-              <ShieldCheck className="h-7 w-7 text-primary-foreground" />
-            </div>
-          </div>
-          <div className="flex justify-center">
-            <InputOTP maxLength={6} value={otp} onChange={setOtp}>
-              <InputOTPGroup>
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <InputOTPSlot key={i} index={i} className="h-12 w-12 text-lg" />
-                ))}
-              </InputOTPGroup>
-            </InputOTP>
-          </div>
-          <Button onClick={submitOtp} disabled={loading} className="w-full h-11 bg-gradient-primary hover:opacity-90 shadow-elegant">
-            {loading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Verifying...</> : "Verify & continue"}
-          </Button>
-
-          <div className="relative my-4">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t border-border" />
-            </div>
-            <div className="relative flex justify-center text-[10px] uppercase">
-              <span className="bg-background px-2 text-muted-foreground">Or</span>
-            </div>
-          </div>
-          
-          <Button variant="outline" type="button" onClick={submitOtp} disabled={loading} className="w-full h-11">
-            <Smartphone className="h-4 w-4 mr-2" />
-            Verify with Authenticator App
-          </Button>
-
-          <p className="text-xs text-center text-muted-foreground mt-2">
-            Didn't get it? <button className="text-primary hover:underline">Resend code</button>
-          </p>
-        </div>
-      )}
-    </AuthLayout>
+      </AuthLayout>
+    </>
   );
 };
 

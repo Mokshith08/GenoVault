@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { register, login, getMe } = require("../controllers/authController");
+const { setupMFA, verifyMFA } = require("../controllers/mfaController");
 const { protect } = require("../middleware/authMiddleware");
 
 /**
@@ -21,5 +22,10 @@ router.post("/login", login);
 
 // ── Protected ────────────────────────────────────────────────
 router.get("/me", protect, getMe);
+
+// ── MFA (TOTP) ───────────────────────────────────────────────
+// Both endpoints require a valid JWT; MFA is tied to the current user
+router.post("/setup-mfa",  protect, setupMFA);
+router.post("/verify-mfa", protect, verifyMFA);
 
 module.exports = router;
