@@ -17,8 +17,8 @@
 const { v4: uuidv4 } = require("uuid");
 const path = require("path");
 const GenomicFile = require("../models/GenomicFile");
-const { generateUploadSasToken, verifyBlobExists, getBlobProperties } = require("../services/azureService");
-const { uploadToIPFS } = require("../services/ipfsService");
+const { generateUploadSasToken, verifyBlobExists, getBlobProperties, getBlobServiceClient } = require("../services/azureService");
+const { uploadToIPFS, deleteFromIPFS } = require("../services/ipfsService");
 
 // ── Allowed genomic file extensions ─────────────────────────────
 const ALLOWED_EXTENSIONS = new Set([".fastq", ".bam", ".vcf"]);
@@ -77,8 +77,8 @@ const getUploadUrl = async (req, res) => {
     // ── 3. Generate safe, unique blob name ──────────────────────
     const blobName = generateSafeBlobName(filename);
 
-    // ── 4. Generate SAS token (30-minute window) ─────────────────
-    const { sasToken, blobUrl, containerName } = generateUploadSasToken(blobName, 30);
+    // ── 4. Generate SAS token (2-hour window for large files) ────
+    const { sasToken, blobUrl, containerName } = generateUploadSasToken(blobName, 120);
 
     // ── 5. Respond with upload credentials ──────────────────────
     return res.status(200).json({
@@ -183,7 +183,9 @@ const confirmUpload = async (req, res) => {
     setImmediate(async () => {
       try {
         await GenomicFile.findByIdAndUpdate(genomicFile._id, { ipfsStatus: "uploading" });
-        const { cid, ipfsUrl } = await uploadToIPFS(blobName, originalName, actualMime);
+        const { cid, ipfsUrl } = await uploadToIPFS(
+          blobName, originalName, actualMime, actualSize   // pass sizeBytes — required!
+        );
         await GenomicFile.findByIdAndUpdate(genomicFile._id, {
           ipfsCid:    cid,
           ipfsUrl,
@@ -252,4 +254,122 @@ const getIpfsStatus = async (req, res) => {
   }
 };
 
-module.exports = { getUploadUrl, confirmUpload, getMyFiles, getIpfsStatus };
+/* ──────────────────────────────────────────────────────────────────
+   DELETE /api/files/:id
+   Protected – owner role only
+   Deletes the file from Azure, Filebase/IPFS, and MongoDB.
+──────────────────────────────────────────────────────────────────*/
+const deleteFile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.userId;
+
+    // 1. Find the file and verify ownership
+    const file = await GenomicFile.findById(id);
+    if (!file) return res.status(404).json({ success: false, message: "File not found" });
+    if (String(file.owner) !== String(userId)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    const blobName      = file.azureBlobName;
+    const containerName = file.azureContainerName;
+    const errors        = [];
+
+    // 2. Delete from Azure Blob Storage
+    try {
+      const azureAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME;
+      const azureAccountKey  = process.env.AZURE_STORAGE_ACCOUNT_KEY;
+      if (azureAccountName && azureAccountKey) {
+        const { BlobServiceClient, StorageSharedKeyCredential } = require("@azure/storage-blob");
+        const cred   = new StorageSharedKeyCredential(azureAccountName, azureAccountKey);
+        const client = new BlobServiceClient(`https://${azureAccountName}.blob.core.windows.net`, cred);
+        const blobClient = client.getContainerClient(containerName).getBlobClient(blobName);
+        await blobClient.deleteIfExists();
+        console.log(`[Azure] ✅ Deleted blob: ${blobName}`);
+      }
+    } catch (azureErr) {
+      console.error(`[Azure] ❌ Delete failed:`, azureErr.message);
+      errors.push(`Azure: ${azureErr.message}`);
+    }
+
+    // 3. Delete from Filebase / IPFS (non-blocking — don't fail request if IPFS fails)
+    try {
+      if (file.ipfsStatus === "done" || file.ipfsStatus === "uploading") {
+        await deleteFromIPFS(blobName);
+        console.log(`[IPFS] ✅ Unpinned: ${blobName}`);
+      }
+    } catch (ipfsErr) {
+      console.warn(`[IPFS] ⚠️ Unpin skipped:`, ipfsErr.message);
+      // Non-fatal — IPFS deletion is best-effort
+    }
+
+    // 4. Remove from MongoDB
+    await GenomicFile.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      message: errors.length
+        ? `File deleted from database. Azure errors: ${errors.join("; ")}`
+        : "File deleted from Azure, IPFS, and database.",
+    });
+  } catch (err) {
+    console.error("[deleteFile]", err);
+    return res.status(500).json({ success: false, message: "Failed to delete file" });
+  }
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   POST /api/files/:id/retry-ipfs
+   Protected – owner role only
+   Re-triggers the IPFS backup for a file where ipfsStatus === "failed".
+──────────────────────────────────────────────────────────────────*/
+const retryIpfs = async (req, res) => {
+  try {
+    const { id }   = req.params;
+    const userId   = req.user.userId;
+
+    const file = await GenomicFile.findById(id);
+    if (!file)
+      return res.status(404).json({ success: false, message: "File not found" });
+    if (String(file.owner) !== String(userId))
+      return res.status(403).json({ success: false, message: "Access denied" });
+    if (file.ipfsStatus === "done")
+      return res.status(400).json({ success: false, message: "IPFS backup already completed" });
+
+    // Reset to pending immediately so the frontend can start polling
+    await GenomicFile.findByIdAndUpdate(id, { ipfsStatus: "pending", ipfsCid: null, ipfsUrl: null });
+
+    // Trigger the backup asynchronously (same pattern as confirmUpload)
+    setImmediate(async () => {
+      try {
+        await GenomicFile.findByIdAndUpdate(id, { ipfsStatus: "uploading" });
+        const { cid, ipfsUrl } = await uploadToIPFS(
+          file.azureBlobName,
+          file.originalName,
+          file.mimeType || "application/octet-stream",
+          file.sizeBytes
+        );
+        await GenomicFile.findByIdAndUpdate(id, {
+          ipfsCid:    cid,
+          ipfsUrl,
+          ipfsStatus: "done",
+        });
+        console.log(`[IPFS] ✅ Retry succeeded for ${file.azureBlobName} → CID: ${cid}`);
+      } catch (ipfsErr) {
+        console.error(`[IPFS] ❌ Retry failed for ${file.azureBlobName}:`, ipfsErr.message);
+        await GenomicFile.findByIdAndUpdate(id, { ipfsStatus: "failed" });
+      }
+    });
+
+    return res.status(202).json({
+      success: true,
+      message: "IPFS retry started. Poll /ipfs-status for progress.",
+      ipfsStatus: "pending",
+    });
+  } catch (err) {
+    console.error("[retryIpfs]", err);
+    return res.status(500).json({ success: false, message: "Failed to start IPFS retry" });
+  }
+};
+
+module.exports = { getUploadUrl, confirmUpload, getMyFiles, getIpfsStatus, deleteFile, retryIpfs };

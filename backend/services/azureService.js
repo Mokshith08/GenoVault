@@ -151,16 +151,48 @@ const getReadableBlobStream = async (blobName) => {
  */
 const ensureContainerExists = async () => {
   try {
-    const client = getBlobServiceClient();
+    const client          = getBlobServiceClient();
     const containerClient = client.getContainerClient(CONTAINER_NAME);
-    const created = await containerClient.createIfNotExists({
-      access: "private", // No public anonymous access
-    });
+    const created         = await containerClient.createIfNotExists();
     if (created.succeeded) {
       console.log(`[Azure] Container "${CONTAINER_NAME}" created`);
     }
   } catch (err) {
     console.error("[Azure] Failed to ensure container exists:", err.message);
+  }
+};
+
+/**
+ * configureCors
+ * ─────────────
+ * Sets CORS rules on the Azure Blob service so browsers can upload directly
+ * without preflight OPTIONS requests blocking every single block upload.
+ *
+ * Without this, Chrome/Firefox sends an OPTIONS preflight before EVERY block,
+ * effectively DOUBLING the number of round-trips and halving upload speed.
+ *
+ * Called once on server startup — safe to call repeatedly (idempotent).
+ */
+const configureCors = async () => {
+  try {
+    const client = getBlobServiceClient();
+
+    await client.setProperties({
+      cors: [
+        {
+          allowedOrigins:  "*",                                           // tighten to your domain in prod
+          allowedMethods:  "DELETE,GET,HEAD,MERGE,POST,OPTIONS,PUT,PATCH",
+          allowedHeaders:  "*",
+          exposedHeaders:  "*",
+          maxAgeInSeconds: 86400,                                         // 24h cache — no preflight repeat
+        },
+      ],
+    });
+
+    console.log("[Azure] ✅ CORS configured — browser direct-upload enabled");
+  } catch (err) {
+    console.error("[Azure] ❌ Failed to set CORS rules:", err.message);
+    console.error("        → Upload may be slow due to preflight delays");
   }
 };
 
@@ -170,4 +202,5 @@ module.exports = {
   getBlobProperties,
   getReadableBlobStream,
   ensureContainerExists,
+  configureCors,
 };

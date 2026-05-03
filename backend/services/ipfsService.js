@@ -1,102 +1,163 @@
 /**
  * ipfsService.js
  * ──────────────
- * Uploads files to Filebase (IPFS pinning service) using their
- * S3-compatible API.
+ * Uploads files to Filebase (IPFS pinning service) via S3-compatible API.
  *
- * Why S3-compatible?
- *  Filebase exposes an S3 API which means we can use the standard
- *  AWS SDK — no custom IPFS library needed. The CID is returned as
- *  a response header (x-amz-meta-cid).
- *
- * Flow:
- *  1. Stream file bytes from Azure Blob Storage
- *  2. PUT to Filebase S3 endpoint
- *  3. Extract CID from response headers
- *  4. Return CID + public IPFS gateway URL
+ * CID extraction fix:
+ *  AWS SDK v3 does NOT expose raw response headers via response.$metadata.headers.
+ *  Instead, we use a middleware interceptor on the S3Client to capture the raw
+ *  x-amz-meta-cid header that Filebase returns after a successful PutObject.
  */
 
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
-const { getReadableBlobStream } = require("./azureService");
+const {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+} = require("@aws-sdk/client-s3");
+const { getReadableBlobStream, getBlobProperties } = require("./azureService");
 
-const FILEBASE_ENDPOINT  = "https://s3.filebase.com";
-const FILEBASE_BUCKET    = process.env.FILEBASE_BUCKET_NAME;
+const FILEBASE_ENDPOINT   = "https://s3.filebase.com";
+const FILEBASE_BUCKET     = process.env.FILEBASE_BUCKET_NAME;
 const FILEBASE_ACCESS_KEY = process.env.FILEBASE_ACCESS_KEY;
 const FILEBASE_SECRET_KEY = process.env.FILEBASE_SECRET_KEY;
-
-const IPFS_GATEWAY = "https://ipfs.filebase.io/ipfs";
+const IPFS_GATEWAY        = "https://ipfs.filebase.io/ipfs";
 
 /**
  * getS3Client
  * ───────────
- * Returns a configured S3Client pointed at Filebase's endpoint.
+ * Builds an S3Client with a middleware that captures the raw HTTP response
+ * headers — the only reliable way to get Filebase's x-amz-meta-cid in SDK v3.
  */
-const getS3Client = () => {
+const getS3ClientWithCidCapture = () => {
   if (!FILEBASE_ACCESS_KEY || !FILEBASE_SECRET_KEY) {
     throw new Error(
-      "Filebase credentials missing. Set FILEBASE_ACCESS_KEY, FILEBASE_SECRET_KEY, and FILEBASE_BUCKET_NAME in .env"
+      "Filebase credentials missing. Set FILEBASE_ACCESS_KEY, FILEBASE_SECRET_KEY, FILEBASE_BUCKET_NAME in .env"
     );
   }
-  return new S3Client({
+
+  let capturedCid = null;
+
+  const client = new S3Client({
     endpoint: FILEBASE_ENDPOINT,
-    region: "us-east-1",           // Filebase requires this even though it's not AWS
+    region:   "us-east-1",
     credentials: {
       accessKeyId:     FILEBASE_ACCESS_KEY,
       secretAccessKey: FILEBASE_SECRET_KEY,
     },
-    forcePathStyle: true,           // Required for non-AWS S3 endpoints
+    forcePathStyle: true,
   });
+
+  // Middleware: intercept the raw HTTP response to grab x-amz-meta-cid header
+  client.middlewareStack.add(
+    (next) => async (args) => {
+      const result = await next(args);
+      // result.response is the raw http response from the SDK's HTTP handler
+      const headers = result?.response?.headers || {};
+      capturedCid =
+        headers["x-amz-meta-cid"] ||
+        headers["X-Amz-Meta-Cid"] ||
+        null;
+      return result;
+    },
+    { step: "deserialize", priority: "low", name: "captureCidMiddleware" }
+  );
+
+  return { client, getCid: () => capturedCid };
 };
 
 /**
- * uploadToIPFS
- * ────────────
- * Streams the blob from Azure directly to Filebase — the backend
- * never writes to disk.
- *
- * @param {string} blobName     - Azure blob name (used as IPFS key)
- * @param {string} originalName - Human-readable filename for metadata
- * @param {string} mimeType     - MIME type of the file
- * @returns {Promise<{ cid: string, ipfsUrl: string }>}
+ * Simple S3 client (no CID capture needed — for delete/head operations)
  */
-const uploadToIPFS = async (blobName, originalName, mimeType = "application/octet-stream") => {
-  if (!FILEBASE_BUCKET) {
-    throw new Error("FILEBASE_BUCKET_NAME is not set in .env");
+const getS3Client = () =>
+  new S3Client({
+    endpoint:    FILEBASE_ENDPOINT,
+    region:      "us-east-1",
+    credentials: {
+      accessKeyId:     FILEBASE_ACCESS_KEY,
+      secretAccessKey: FILEBASE_SECRET_KEY,
+    },
+    forcePathStyle: true,
+  });
+
+/* ─────────────────────────────────────────────────────────────────────────
+   uploadToIPFS
+   ─────────────
+   Streams file bytes from Azure Blob Storage → Filebase IPFS.
+   Backend never writes to disk.
+
+   @param {string} blobName     - Azure blob key
+   @param {string} originalName - Human-readable filename (stored as metadata)
+   @param {string} mimeType     - MIME type
+   @param {number} sizeBytes    - File size in bytes (required for streaming upload)
+   @returns {{ cid: string, ipfsUrl: string }}
+──────────────────────────────────────────────────────────────────────────*/
+const uploadToIPFS = async (blobName, originalName, mimeType = "application/octet-stream", sizeBytes) => {
+  if (!FILEBASE_BUCKET) throw new Error("FILEBASE_BUCKET_NAME is not set in .env");
+
+  // ── Get file size for Content-Length (required by Filebase for streaming) ──
+  let contentLength = sizeBytes;
+  if (!contentLength) {
+    try {
+      const props = await getBlobProperties(blobName);
+      contentLength = props.sizeBytes;
+    } catch {
+      throw new Error("Could not determine file size for IPFS upload. Ensure the blob exists in Azure.");
+    }
   }
 
-  // ── Stream from Azure ──────────────────────────────────────────
+  // ── Stream file from Azure ─────────────────────────────────────────────────
   const stream = await getReadableBlobStream(blobName);
 
-  // ── Upload to Filebase ─────────────────────────────────────────
-  const s3 = getS3Client();
+  // ── Upload to Filebase with CID-capture middleware ─────────────────────────
+  const { client, getCid } = getS3ClientWithCidCapture();
 
   const command = new PutObjectCommand({
-    Bucket: FILEBASE_BUCKET,
-    Key:    blobName,
-    Body:   stream,
-    ContentType: mimeType,
+    Bucket:        FILEBASE_BUCKET,
+    Key:           blobName,
+    Body:          stream,
+    ContentType:   mimeType,
+    ContentLength: contentLength,   // Required! Filebase rejects streaming without length
     Metadata: {
-      "original-name": originalName,
+      "original-name": encodeURIComponent(originalName), // encode to avoid header char issues
     },
   });
 
-  // Filebase returns the IPFS CID in the response metadata header
-  const response = await s3.send(command);
+  await client.send(command);
 
-  // Extract CID from response metadata
-  // Filebase puts it in: response.$metadata.headers['x-amz-meta-cid']
-  const cid =
-    response?.$metadata?.headers?.["x-amz-meta-cid"] ||
-    response?.ETag?.replace(/"/g, ""); // Fallback: ETag sometimes == CID
+  // ── Extract CID ────────────────────────────────────────────────────────────
+  const cid = getCid();
 
   if (!cid) {
-    throw new Error("Filebase did not return a CID in the response. Check your Filebase bucket configuration.");
+    // Last-resort: use HeadObject to read the CID from stored metadata
+    console.warn("[IPFS] CID not in upload response — trying HeadObject fallback");
+    const headRes = await getS3Client().send(
+      new HeadObjectCommand({ Bucket: FILEBASE_BUCKET, Key: blobName })
+    );
+    const fallbackCid = headRes?.Metadata?.["cid"] || headRes?.Metadata?.["x-amz-meta-cid"];
+    if (!fallbackCid) {
+      throw new Error(
+        "Filebase did not return a CID. Check your Filebase bucket is IPFS-enabled."
+      );
+    }
+    return { cid: fallbackCid, ipfsUrl: `${IPFS_GATEWAY}/${fallbackCid}` };
   }
 
-  return {
-    cid,
-    ipfsUrl: `${IPFS_GATEWAY}/${cid}`,
-  };
+  return { cid, ipfsUrl: `${IPFS_GATEWAY}/${cid}` };
 };
 
-module.exports = { uploadToIPFS };
+/* ─────────────────────────────────────────────────────────────────────────
+   deleteFromIPFS
+   ──────────────
+   Removes a file from Filebase (unpins from IPFS).
+   Called when the owner deletes a file.
+
+   @param {string} blobName - The key used when uploading (same as Azure blob name)
+──────────────────────────────────────────────────────────────────────────*/
+const deleteFromIPFS = async (blobName) => {
+  if (!FILEBASE_BUCKET) return; // IPFS not configured — skip silently
+  const s3 = getS3Client();
+  await s3.send(new DeleteObjectCommand({ Bucket: FILEBASE_BUCKET, Key: blobName }));
+};
+
+module.exports = { uploadToIPFS, deleteFromIPFS };

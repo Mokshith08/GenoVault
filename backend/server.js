@@ -14,22 +14,16 @@ const otpRoutes  = require("./routes/otpRoutes");
 const fileRoutes = require("./routes/fileRoutes");
 
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("Server running");
-});
-
-
 // ─────────────────────────────────────────────────────────────
 const app = express();
 
 // ── 1. Connect to MongoDB + Azure bootstrap ──────────────────
 connectDB();
 
-// Ensure Azure Blob container exists on startup (non-blocking)
-const { ensureContainerExists } = require("./services/azureService");
-ensureContainerExists().catch(() => {}); // Errors are logged inside the service
+// Ensure Azure Blob container exists + CORS configured on startup (non-blocking)
+const { ensureContainerExists, configureCors } = require("./services/azureService");
+ensureContainerExists().catch(() => {});
+configureCors().catch(() => {}); // Critical for fast browser-direct uploads
 
 // ── 2. Security middleware ────────────────────────────────────
 app.use(helmet()); // Sets secure HTTP headers

@@ -2,21 +2,112 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud, FileText, X, CheckCircle2, Loader2, AlertCircle,
-  Cloud, Database, Dna, ExternalLink, Copy, RefreshCw, Layers,
-  Zap, Shield, Globe
+  Cloud, Database, Dna, Copy, RefreshCw, Layers, Trash2,
+  Zap, Shield, Globe, XCircle, TriangleAlert
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
 import { useChunkedUpload, UploadState } from "@/hooks/useChunkedUpload";
+
+// ── Custom Delete Confirmation Modal ─────────────────────────────────────
+interface DeleteModalProps {
+  fileName: string;
+  onConfirm: () => void;
+  onCancel:  () => void;
+}
+const DeleteModal = ({ fileName, onConfirm, onCancel }: DeleteModalProps) => (
+  <AnimatePresence>
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.92, y: 16 }}
+        animate={{ opacity: 1, scale: 1,    y: 0  }}
+        exit={{ opacity: 0, scale: 0.92, y: 16 }}
+        transition={{ type: "spring", stiffness: 340, damping: 28 }}
+        onClick={e => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl p-6 shadow-2xl"
+        style={{
+          background: "linear-gradient(145deg, #1a1a2e 0%, #16213e 100%)",
+          border: "1px solid rgba(239,68,68,0.25)",
+        }}
+      >
+        {/* Icon */}
+        <div className="flex justify-center mb-4">
+          <div className="h-14 w-14 rounded-2xl flex items-center justify-center"
+            style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
+            <TriangleAlert className="h-7 w-7 text-red-400" />
+          </div>
+        </div>
+
+        {/* Text */}
+        <h3 className="text-center text-lg font-semibold text-foreground mb-2">
+          Delete File?
+        </h3>
+        <p className="text-center text-sm text-muted-foreground mb-1">
+          This will permanently remove
+        </p>
+        <p className="text-center text-sm font-mono font-medium text-red-300 truncate px-2 mb-4"
+          title={fileName}>
+          {fileName}
+        </p>
+
+        {/* What gets deleted */}
+        <div className="rounded-xl p-3 mb-5 space-y-2"
+          style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)" }}>
+          {[
+            { icon: Cloud,    label: "Azure Blob Storage"  },
+            { icon: Globe,    label: "Filebase IPFS backup" },
+            { icon: Database, label: "Database metadata"   },
+          ].map(({ icon: Icon, label }) => (
+            <div key={label} className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Icon className="h-3.5 w-3.5 text-red-400 flex-shrink-0" />
+              {label}
+              <span className="ml-auto text-red-400 font-medium">will be deleted</span>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground mb-5">
+          This action <span className="text-red-400 font-semibold">cannot be undone</span>.
+        </p>
+
+        {/* Actions */}
+        <div className="grid grid-cols-2 gap-3">
+          <Button
+            variant="outline"
+            onClick={onCancel}
+            className="w-full rounded-xl border-border hover:bg-muted"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={onConfirm}
+            className="w-full rounded-xl font-semibold"
+            style={{ background: "linear-gradient(135deg,#ef4444,#dc2626)" }}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </Button>
+        </div>
+      </motion.div>
+    </motion.div>
+  </AnimatePresence>
+);
 
 const API_BASE = "http://localhost:5000/api";
 const ALLOWED_EXTENSIONS = [".fastq", ".bam", ".vcf"];
 
 interface StoredFile {
+  _id:          string;
   id:           string;
   originalName: string;
   sizeBytes:    number;
@@ -24,7 +115,7 @@ interface StoredFile {
   ipfsCid:      string | null;
   ipfsUrl:      string | null;
   ipfsStatus:   "pending" | "uploading" | "done" | "failed";
-  uploadedAt:   string;
+  createdAt:    string;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -35,34 +126,53 @@ const formatBytes = (bytes: number): string => {
 };
 
 const phaseLabel: Record<UploadState["phase"], string> = {
-  idle:        "",
-  requesting:  "Getting upload token…",
-  uploading:   "Uploading chunks to Azure…",
-  committing:  "Committing block list…",
-  confirming:  "Confirming with server…",
-  done:        "Upload complete!",
-  error:       "Upload failed",
+  idle:       "",
+  requesting: "Getting secure upload token…",
+  uploading:  "Uploading to Azure Blob Storage…",
+  confirming: "Saving metadata & starting IPFS backup…",
+  done:       "Upload complete!",
+  error:      "Upload failed",
 };
 
-// ── IPFS Status Badge ──────────────────────────────────────────────────────
-const IpfsBadge = ({ status, cid, ipfsUrl }: { status: string; cid: string | null; ipfsUrl: string | null }) => {
-  const map = {
-    pending:   { color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30", label: "IPFS Pending" },
-    uploading: { color: "bg-blue-500/20 text-blue-400 border-blue-500/30",       label: "IPFS Uploading" },
+// ── Azure confirmed badge ─────────────────────────────────────────────────
+const AzureBadge = () => (
+  <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border
+    bg-blue-500/10 text-blue-400 border-blue-500/30">
+    <Cloud className="h-3 w-3" />
+    Azure
+    <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+  </span>
+);
+
+// ── IPFS Status Badge ─────────────────────────────────────────────────────
+const IpfsBadge = ({
+  status, cid, onRetry, retrying,
+}: {
+  status:   string;
+  cid:      string | null;
+  onRetry:  () => void;
+  retrying: boolean;
+}) => {
+  const map: Record<string, { color: string; label: string }> = {
+    pending:   { color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",    label: "IPFS Pending"   },
+    uploading: { color: "bg-blue-500/20 text-blue-400 border-blue-500/30",          label: "IPFS Syncing"   },
     done:      { color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30", label: "IPFS Backed Up" },
-    failed:    { color: "bg-red-500/20 text-red-400 border-red-500/30",           label: "IPFS Failed" },
+    failed:    { color: "bg-red-500/20 text-red-400 border-red-500/30",             label: "IPFS Failed"    },
   };
-  const style = map[status as keyof typeof map] || map.pending;
+  const style = map[status] ?? map.pending;
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-wrap">
+      {/* Status pill */}
       <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${style.color}`}>
-        {status === "uploading" && <Loader2 className="h-3 w-3 animate-spin" />}
-        {status === "done"      && <CheckCircle2 className="h-3 w-3" />}
-        {status === "failed"    && <AlertCircle className="h-3 w-3" />}
-        {status === "pending"   && <Database className="h-3 w-3" />}
-        {style.label}
+        {(status === "uploading" || retrying) && <Loader2 className="h-3 w-3 animate-spin" />}
+        {status === "done"                    && <CheckCircle2 className="h-3 w-3" />}
+        {status === "failed"  && !retrying    && <XCircle className="h-3 w-3" />}
+        {status === "pending" && !retrying    && <Database className="h-3 w-3" />}
+        {retrying ? "Retrying…" : style.label}
       </span>
+
+      {/* CID copy button (done) */}
       {status === "done" && cid && (
         <button
           onClick={() => { navigator.clipboard.writeText(cid); toast.success("CID copied!"); }}
@@ -70,46 +180,60 @@ const IpfsBadge = ({ status, cid, ipfsUrl }: { status: string; cid: string | nul
           title={cid}
         >
           <Copy className="h-3 w-3" />
-          {cid.slice(0, 8)}…
+          {cid.slice(0, 10)}…
         </button>
       )}
-      {status === "done" && ipfsUrl && (
-        <a href={ipfsUrl} target="_blank" rel="noopener noreferrer"
-          className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-          <ExternalLink className="h-3 w-3" />
-          IPFS
-        </a>
+
+      {/* Retry button (failed only) */}
+      {status === "failed" && !retrying && (
+        <button
+          onClick={onRetry}
+          className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border
+            bg-indigo-500/10 text-indigo-400 border-indigo-500/30
+            hover:bg-indigo-500/20 transition-colors"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Retry IPFS
+        </button>
       )}
     </div>
   );
 };
 
-// ── Main Upload Component ──────────────────────────────────────────────────
+// ── Main Component ────────────────────────────────────────────────────────
 const Upload = () => {
-  const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [description, setDescription] = useState("");
-  const [files, setFiles] = useState<StoredFile[]>([]);
-  const [loadingFiles, setLoadingFiles] = useState(true);
+  const [dragActive, setDragActive]       = useState(false);
+  const [selectedFile, setSelectedFile]   = useState<File | null>(null);
+  const [description, setDescription]     = useState("");
+  const [files, setFiles]                 = useState<StoredFile[]>([]);
+  const [loadingFiles, setLoadingFiles]   = useState(true);
+  const [deletingId, setDeletingId]       = useState<string | null>(null);
+  const [retryingId, setRetryingId]       = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { state, upload, cancel, reset } = useChunkedUpload();
-
-  // Auth token from localStorage
   const token = localStorage.getItem("genovault-token") || "";
 
-  /* ── Load existing files ──────────────────────────────────── */
+  /* ── Fetch file list ──────────────────────────────────────── */
   const fetchFiles = useCallback(async () => {
     if (!token) return;
+    setLoadingFiles(true);       // ← always show spinner on refresh
     try {
-      const res = await fetch(`${API_BASE}/files/my-files`, {
+      const res  = await fetch(`${API_BASE}/files/my-files`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      if (res.ok) setFiles(data.files || []);
+      if (res.ok) {
+        setFiles(
+          (data.files || []).map((f: any) => ({ ...f, id: f._id || f.id }))
+        );
+      } else {
+        toast.error(data.message || "Failed to load files");
+      }
     } catch {
-      // silently ignore — file list is non-critical
+      toast.error("Could not reach server");
     } finally {
       setLoadingFiles(false);
     }
@@ -117,7 +241,7 @@ const Upload = () => {
 
   useEffect(() => { fetchFiles(); }, [fetchFiles]);
 
-  /* ── Poll IPFS status for pending files ───────────────────── */
+  /* ── IPFS status polling ──────────────────────────────────── */
   const pollIpfsStatus = useCallback(async () => {
     const pending = files.filter(f => f.ipfsStatus === "pending" || f.ipfsStatus === "uploading");
     if (!pending.length) return;
@@ -125,7 +249,7 @@ const Upload = () => {
     await Promise.allSettled(
       pending.map(async (f) => {
         try {
-          const res = await fetch(`${API_BASE}/files/${f.id}/ipfs-status`, {
+          const res  = await fetch(`${API_BASE}/files/${f.id}/ipfs-status`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           const data = await res.json();
@@ -150,16 +274,15 @@ const Upload = () => {
   }, [files, pollIpfsStatus]);
 
   /* ── File validation ──────────────────────────────────────── */
-  const validateFile = (file: File): string | null => {
+  const validateFile = (file: File) => {
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      return `"${ext}" is not allowed. Accepted: ${ALLOWED_EXTENSIONS.join(", ")}`;
-    }
-    return null;
+    return ALLOWED_EXTENSIONS.includes(ext)
+      ? null
+      : `"${ext}" not allowed. Accepted: ${ALLOWED_EXTENSIONS.join(", ")}`;
   };
 
   const handleFileSelect = (fileList: FileList | null) => {
-    if (!fileList || !fileList[0]) return;
+    if (!fileList?.[0]) return;
     const file = fileList[0];
     const err  = validateFile(file);
     if (err) { toast.error(err); return; }
@@ -167,50 +290,107 @@ const Upload = () => {
     reset();
   };
 
-  /* ── Start upload ─────────────────────────────────────────── */
+  /* ── Upload ───────────────────────────────────────────────── */
   const startUpload = async () => {
     if (!selectedFile) return;
     if (!token) { toast.error("Not authenticated"); return; }
-
     await upload(selectedFile, description, token);
   };
 
-  /* ── After successful upload ──────────────────────────────── */
+  /* ── Post-upload success ──────────────────────────────────── */
   useEffect(() => {
     if (state.phase === "done" && state.cloudUrl) {
       const newFile: StoredFile = {
+        _id:          state.fileId,
         id:           state.fileId,
         originalName: selectedFile?.name || "",
         sizeBytes:    selectedFile?.size || 0,
         cloudUrl:     state.cloudUrl,
-        ipfsCid:      state.ipfsCid || null,
-        ipfsUrl:      state.ipfsUrl || null,
+        ipfsCid:      null,
+        ipfsUrl:      null,
         ipfsStatus:   "pending",
-        uploadedAt:   new Date().toISOString(),
+        createdAt:    new Date().toISOString(),
       };
       setFiles(prev => [newFile, ...prev]);
-      toast.success(`${selectedFile?.name} uploaded to Azure ✓`);
+      toast.success(`${selectedFile?.name} uploaded to Azure ✓ — IPFS backup started`);
       setSelectedFile(null);
       setDescription("");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.phase]);
 
+  /* ── Delete ──────────────────────────────────────────── */
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const { id: fileId, name: fileName } = pendingDelete;
+    setPendingDelete(null);
+    setDeletingId(fileId);
+    try {
+      const res  = await fetch(`${API_BASE}/files/${fileId}`, {
+        method:  "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFiles(prev => prev.filter(f => f.id !== fileId));
+        toast.success("File deleted from Azure, IPFS and database");
+      } else {
+        toast.error(data.message || "Delete failed");
+      }
+    } catch {
+      toast.error("Could not reach server");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+  /* ── Retry IPFS ──────────────────────────────────────────── */
+  const handleRetryIpfs = async (fileId: string) => {
+    setRetryingId(fileId);
+    try {
+      const res  = await fetch(`${API_BASE}/files/${fileId}/retry-ipfs`, {
+        method:  "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // Optimistically reset local state to pending → poller takes over
+        setFiles(prev => prev.map(f =>
+          f.id === fileId ? { ...f, ipfsStatus: "pending", ipfsCid: null, ipfsUrl: null } : f
+        ));
+        toast.info("IPFS retry started — polling for status…");
+      } else {
+        toast.error(data.message || "Retry failed");
+      }
+    } catch {
+      toast.error("Could not reach server");
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
   const isUploading = !["idle", "done", "error"].includes(state.phase);
 
   return (
     <>
+      {/* Custom delete confirmation modal */}
+      {pendingDelete && (
+        <DeleteModal
+          fileName={pendingDelete.name}
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
       <PageHeader
         title="Upload Genomic Files"
         description="Direct-to-Azure chunked upload with IPFS backup. GB-scale files supported."
       />
 
-      {/* ── Architecture info strip ──────────────────────────── */}
+      {/* Architecture info strip */}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
-          { icon: Zap,    label: "Chunked Upload",   sub: "8 MB chunks · 5 parallel" },
-          { icon: Shield, label: "SAS Token Auth",   sub: "Direct-to-Azure · JWT gated" },
-          { icon: Globe,  label: "IPFS Backup",      sub: "Filebase · auto after upload" },
+          { icon: Zap,    label: "Chunked Upload", sub: "4 MB blocks · 16 parallel · Azure SDK" },
+          { icon: Shield, label: "SAS Token Auth", sub: "Direct-to-Azure · JWT gated" },
+          { icon: Globe,  label: "IPFS Backup",    sub: "Filebase · auto after upload" },
         ].map(({ icon: Icon, label, sub }) => (
           <div key={label}
             className="flex items-center gap-3 rounded-xl px-4 py-3"
@@ -227,7 +407,7 @@ const Upload = () => {
         ))}
       </div>
 
-      {/* ── Drop zone ─────────────────────────────────────────── */}
+      {/* Drop zone */}
       <Card
         onDragOver={e => { e.preventDefault(); if (!isUploading) setDragActive(true); }}
         onDragLeave={() => setDragActive(false)}
@@ -238,7 +418,7 @@ const Upload = () => {
         }}
         className={`relative overflow-hidden border-2 border-dashed transition-all p-10 text-center cursor-pointer select-none
           ${isUploading ? "pointer-events-none opacity-75" : ""}
-          ${dragActive ? "border-primary bg-accent/40 scale-[1.01]" : "border-border hover:border-primary/40"}`}
+          ${dragActive  ? "border-primary bg-accent/40 scale-[1.01]" : "border-border hover:border-primary/40"}`}
         onClick={() => { if (!isUploading && !selectedFile) inputRef.current?.click(); }}
       >
         <input
@@ -274,7 +454,7 @@ const Upload = () => {
             </>
           ) : (
             <div className="w-full max-w-sm" onClick={e => e.stopPropagation()}>
-              {/* Selected file info */}
+              {/* Selected file card */}
               <div className="flex items-center gap-3 p-3 rounded-xl mb-3"
                 style={{ background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.2)" }}>
                 <div className="h-10 w-10 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -293,7 +473,7 @@ const Upload = () => {
                 )}
               </div>
 
-              {/* Optional description */}
+              {/* Description input */}
               {!isUploading && state.phase !== "done" && (
                 <input
                   type="text"
@@ -305,7 +485,6 @@ const Upload = () => {
                 />
               )}
 
-              {/* Upload / cancel buttons */}
               {state.phase === "idle" && (
                 <Button onClick={startUpload} className="w-full"
                   style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}>
@@ -334,7 +513,7 @@ const Upload = () => {
         </motion.div>
       </Card>
 
-      {/* ── Upload progress ────────────────────────────────────── */}
+      {/* Upload progress card */}
       <AnimatePresence>
         {isUploading && (
           <motion.div
@@ -344,7 +523,6 @@ const Upload = () => {
             className="mt-4 overflow-hidden"
           >
             <Card className="p-5" style={{ border: "1px solid rgba(99,102,241,0.25)" }}>
-              {/* Header */}
               <div className="flex items-center gap-3 mb-4">
                 <div className="h-10 w-10 rounded-lg flex items-center justify-center flex-shrink-0"
                   style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}>
@@ -360,7 +538,6 @@ const Upload = () => {
                 </Button>
               </div>
 
-              {/* Progress bar */}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>{phaseLabel[state.phase]}</span>
@@ -369,39 +546,43 @@ const Upload = () => {
                 <Progress value={state.progress} className="h-2" />
               </div>
 
-              {/* Chunk stats */}
-              {state.phase === "uploading" && state.chunksTotal > 0 && (
+              {state.phase === "uploading" && state.totalBytes > 0 && (
                 <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1.5">
                     <Cloud className="h-3.5 w-3.5 text-indigo-400" />
                     Azure Blob Storage
                   </span>
-                  <span>Chunk {state.chunksDone} / {state.chunksTotal}</span>
-                  <span>8 MB · 5 parallel</span>
+                  <span>{formatBytes(state.loadedBytes)} / {formatBytes(state.totalBytes)}</span>
+                  {state.speedMBps > 0 && (
+                    <span className="font-mono text-emerald-400 font-medium">
+                      {state.speedMBps} MB/s
+                    </span>
+                  )}
+                  <span className="text-indigo-400">4 MB · 16 parallel</span>
                 </div>
               )}
 
               {/* Pipeline stages */}
               <div className="mt-4 flex items-center gap-2">
                 {[
-                  { key: "requesting",  label: "Token" },
-                  { key: "uploading",   label: "Upload" },
-                  { key: "committing",  label: "Commit" },
-                  { key: "confirming",  label: "Confirm" },
+                  { key: "requesting", label: "Token"   },
+                  { key: "uploading",  label: "Upload"  },
+                  { key: "confirming", label: "Confirm" },
                 ].map((stage, i, arr) => {
-                  const phases = ["requesting", "uploading", "committing", "confirming", "done"];
+                  const phases     = ["requesting", "uploading", "confirming", "done"];
                   const currentIdx = phases.indexOf(state.phase);
                   const stageIdx   = phases.indexOf(stage.key);
                   const isDone     = currentIdx > stageIdx;
                   const isActive   = currentIdx === stageIdx;
-
                   return (
                     <div key={stage.key} className="flex items-center gap-2 flex-1">
-                      <div className={`flex items-center justify-center h-6 w-6 rounded-full text-xs font-bold transition-all
-                        ${isDone   ? "bg-emerald-500 text-white" : ""}
-                        ${isActive ? "text-white animate-pulse" : ""}
-                        ${!isDone && !isActive ? "bg-muted text-muted-foreground" : ""}`}
-                        style={isActive ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)" } : {}}>
+                      <div
+                        className={`flex items-center justify-center h-6 w-6 rounded-full text-xs font-bold transition-all
+                          ${isDone   ? "bg-emerald-500 text-white"  : ""}
+                          ${isActive ? "text-white animate-pulse"   : ""}
+                          ${!isDone && !isActive ? "bg-muted text-muted-foreground" : ""}`}
+                        style={isActive ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)" } : {}}
+                      >
                         {isDone ? <CheckCircle2 className="h-3.5 w-3.5" /> : i + 1}
                       </div>
                       <span className={`text-xs ${isActive ? "text-foreground font-medium" : "text-muted-foreground"}`}>
@@ -417,15 +598,25 @@ const Upload = () => {
         )}
       </AnimatePresence>
 
-      {/* ── Uploaded files list ────────────────────────────────── */}
+      {/* Files list */}
       <Card className="mt-6 p-6 shadow-card">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">
             Your Files
             <span className="ml-2 text-sm font-normal text-muted-foreground">({files.length})</span>
           </h3>
-          <Button variant="ghost" size="sm" onClick={fetchFiles} className="text-xs text-muted-foreground">
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Refresh
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={fetchFiles}
+            disabled={loadingFiles}
+            className="text-xs text-muted-foreground"
+          >
+            {loadingFiles
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+              : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            }
+            Refresh
           </Button>
         </div>
 
@@ -457,24 +648,35 @@ const Upload = () => {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{f.originalName}</p>
                     <p className="text-xs text-muted-foreground">
-                      {formatBytes(f.sizeBytes)} · {new Date(f.uploadedAt).toLocaleDateString()}
+                      {formatBytes(f.sizeBytes)} · {new Date(f.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  {/* Azure badge */}
-                  <a href={f.cloudUrl} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/30 hover:bg-blue-500/20 transition-colors">
-                    <Cloud className="h-3 w-3" />
-                    Azure
-                    <ExternalLink className="h-2.5 w-2.5" />
-                  </a>
+
+                  {/* Azure confirmation badge (no external link) */}
+                  <AzureBadge />
+
+                  {/* Delete button */}
+                  <button
+                    onClick={() => setPendingDelete({ id: f.id, name: f.originalName })}
+                    disabled={deletingId === f.id}
+                    title="Delete from Azure, IPFS and database"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-1
+                      text-muted-foreground hover:text-destructive disabled:opacity-50"
+                  >
+                    {deletingId === f.id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Trash2 className="h-4 w-4" />
+                    }
+                  </button>
                 </div>
 
                 {/* Bottom row — IPFS status */}
-                <div className="pl-13 pl-[52px]">
+                <div className="pl-[52px]">
                   <IpfsBadge
                     status={f.ipfsStatus}
                     cid={f.ipfsCid}
-                    ipfsUrl={f.ipfsUrl}
+                    onRetry={() => handleRetryIpfs(f.id)}
+                    retrying={retryingId === f.id}
                   />
                 </div>
               </motion.div>
