@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { register, login, getMe } = require("../controllers/authController");
+const { register, login, getMe, forgotPassword, resetPassword, setPin, changePin } = require("../controllers/authController");
 const { setupMFA, verifyMFA } = require("../controllers/mfaController");
 const { protect } = require("../middleware/authMiddleware");
 
@@ -17,11 +17,15 @@ const { protect } = require("../middleware/authMiddleware");
  */
 
 // ── Public ──────────────────────────────────────────────────
-router.post("/register", register);
-router.post("/login", login);
+router.post("/register",         register);
+router.post("/login",            login);
+router.post("/forgot-password",  forgotPassword);
+router.post("/reset-password",   resetPassword);
 
-// ── Protected ────────────────────────────────────────────────
-router.get("/me", protect, getMe);
+// ── Protected ────────────────────────────────────────────
+router.get("/me",         protect, getMe);
+router.post("/set-pin",   protect, setPin);    // First-time PIN setup
+router.post("/change-pin", protect, changePin); // Update existing PIN
 
 // ── MFA (TOTP) ───────────────────────────────────────────────
 // Both endpoints require a valid JWT; MFA is tied to the current user

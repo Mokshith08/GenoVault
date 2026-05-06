@@ -9,9 +9,10 @@ const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
 
 // ── Route imports ────────────────────────────────────────────
-const authRoutes = require("./routes/authRoutes");
-const otpRoutes  = require("./routes/otpRoutes");
-const fileRoutes = require("./routes/fileRoutes");
+const authRoutes   = require("./routes/authRoutes");
+const otpRoutes    = require("./routes/otpRoutes");
+const fileRoutes   = require("./routes/fileRoutes");
+const accessRoutes = require("./routes/accessRoutes");
 
 
 // ─────────────────────────────────────────────────────────────
@@ -89,9 +90,10 @@ app.use("/api/auth/register",   authLimiter);
 app.use("/api/auth/verify-mfa", mfaLimiter); // Strict – brute-force guard
 
 // ── 7. Routes ─────────────────────────────────────────────────
-app.use("/api/auth",  authRoutes);
-app.use("/api/otp",   otpRoutes);
-app.use("/api/files", fileRoutes);
+app.use("/api/auth",   authRoutes);
+app.use("/api/otp",    otpRoutes);
+app.use("/api/files",  fileRoutes);
+app.use("/api/access", accessRoutes);
 
 // Health check (useful for deployment / monitoring)
 app.get("/api/health", (req, res) => {

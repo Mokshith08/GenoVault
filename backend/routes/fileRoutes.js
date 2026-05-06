@@ -3,6 +3,8 @@ const router  = express.Router();
 
 const { protect, requireRole } = require("../middleware/authMiddleware");
 const {
+  uploadEncryptedFile,
+  upload,
   getUploadUrl,
   confirmUpload,
   getMyFiles,
@@ -14,13 +16,18 @@ const {
 /**
  * File Routes — base path: /api/files
  *
- *  GET    /api/files/get-upload-url     – Generate SAS token for direct Azure upload
- *  POST   /api/files/confirm-upload     – Confirm Azure upload; trigger IPFS backup
- *  GET    /api/files/my-files           – List own uploaded files
- *  GET    /api/files/:id/ipfs-status    – Poll IPFS backup progress
- *  POST   /api/files/:id/retry-ipfs    – Retry a failed IPFS backup
- *  DELETE /api/files/:id               – Delete from Azure + IPFS + MongoDB
+ *  POST   /api/files/upload               – Server-side AES-256 encrypt + upload to Azure
+ *  GET    /api/files/get-upload-url       – Generate SAS token for direct Azure upload (legacy)
+ *  POST   /api/files/confirm-upload       – Confirm Azure upload; trigger IPFS backup
+ *  GET    /api/files/my-files             – List own uploaded files
+ *  GET    /api/files/:id/ipfs-status      – Poll IPFS backup progress
+ *  POST   /api/files/:id/retry-ipfs      – Retry a failed IPFS backup
+ *  DELETE /api/files/:id                  – Delete from Azure + IPFS + MongoDB + Key Vault
  */
+
+// ── Encrypted upload (server-side: encrypt → Azure) ─────────────
+// multer.single("file") runs BEFORE the controller to parse multipart/form-data
+router.post("/upload", protect, requireRole("owner"), upload.single("file"), uploadEncryptedFile);
 
 // Generate a SAS token for direct-to-Azure upload
 router.get("/get-upload-url", protect, requireRole("owner"), getUploadUrl);

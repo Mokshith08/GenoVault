@@ -77,6 +77,20 @@ const genomicFileSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    // ── Encryption (AES-256-CBC) ───────────────────────────────
+    // The AES key is stored in Azure Key Vault (never here).
+    // The IV is NOT secret — it is safe to store in MongoDB.
+    isEncrypted: {
+      type: Boolean,
+      default: false,
+    },
+
+    encryptionIv: {
+      type: String, // 32-char hex (16 bytes)
+      default: null,
+      select: false, // Not returned by default — only fetched during decryption
+    },
+
     // ── Upload metadata ────────────────────────────────────────
     uploadStatus: {
       type: String,

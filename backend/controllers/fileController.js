@@ -15,13 +15,32 @@
  */
 
 const { v4: uuidv4 } = require("uuid");
-const path = require("path");
+const path    = require("path");
+const multer  = require("multer");
 const GenomicFile = require("../models/GenomicFile");
-const { generateUploadSasToken, verifyBlobExists, getBlobProperties, getBlobServiceClient } = require("../services/azureService");
+const { generateUploadSasToken, verifyBlobExists, getBlobProperties,
+        getBlobServiceClient, uploadEncryptedBuffer } = require("../services/azureService");
 const { uploadToIPFS, deleteFromIPFS } = require("../services/ipfsService");
+const { generateKey, generateIV, encryptBuffer } = require("../services/encryptionService");
+const { storeEncryptionKey, deleteEncryptionKey } = require("../services/keyVaultService");
 
 // ── Allowed genomic file extensions ─────────────────────────────
 const ALLOWED_EXTENSIONS = new Set([".fastq", ".bam", ".vcf"]);
+
+// ── Multer: in-memory storage (no disk writes) ───────────────────
+// Files are held in memory as Buffer, encrypted, then pushed to Azure.
+// MAX_FILE_SIZE_MB default 500 MB
+const MAX_SIZE_MB = parseInt(process.env.MAX_FILE_SIZE_MB) || 500;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: MAX_SIZE_MB * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    ALLOWED_EXTENSIONS.has(ext)
+      ? cb(null, true)
+      : cb(new Error(`File type "${ext}" not allowed. Accepted: .fastq, .bam, .vcf`));
+  },
+});
 
 /**
  * generateSafeBlobName
@@ -39,6 +58,127 @@ const generateSafeBlobName = (originalName) => {
   const timestamp = Date.now();
   const unique    = uuidv4().replace(/-/g, "").slice(0, 12);
   return `${timestamp}_${unique}${ext}`;
+};
+
+/* ─────────────────────────────────────────────────────────────────
+   POST /api/files/upload
+   Protected – owner role only
+   Multer middleware: single file field "file"
+
+   Encryption flow:
+     1. Receive raw file bytes via multer (memory storage)
+     2. Generate AES-256 key + random 16-byte IV
+     3. Encrypt buffer with AES-256-CBC
+     4. Upload ENCRYPTED buffer to Azure Blob Storage
+     5. Store AES key in Azure Key Vault (keyed by file MongoDB ID)
+     6. Store IV + metadata in MongoDB (key is NOT stored here)
+     7. Trigger async IPFS backup of the encrypted blob
+─────────────────────────────────────────────────────────────────*/
+const uploadEncryptedFile = async (req, res) => {
+  try {
+    // multer already ran — req.file has the bytes
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No file uploaded. Use field name \"file\"." });
+    }
+
+    const userId       = req.user.userId;
+    const originalName = req.file.originalname;
+    const mimeType     = req.file.mimetype || "application/octet-stream";
+    const rawBuffer    = req.file.buffer;
+    const { description } = req.body;
+
+    const ext = path.extname(originalName).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      return res.status(400).json({
+        success: false,
+        message: `File type "${ext}" is not allowed. Accepted: .fastq, .bam, .vcf`,
+      });
+    }
+
+    // ── 1. Generate AES-256 key + IV ───────────────────────
+    const aesKeyHex = generateKey(); // 64-char hex (32 bytes)
+    const ivHex     = generateIV();  // 32-char hex (16 bytes)
+
+    // ── 2. Encrypt the raw file buffer ──────────────────────
+    console.log(`[Upload] Encrypting ${originalName} (${rawBuffer.length} bytes)...`);
+    const encryptedBuffer = encryptBuffer(rawBuffer, aesKeyHex, ivHex);
+
+    // ── 3. Build safe blob name ───────────────────────────
+    const blobName = generateSafeBlobName(originalName);
+
+    // ── 4. Upload ENCRYPTED bytes to Azure ─────────────────
+    console.log(`[Upload] Uploading encrypted blob: ${blobName}`);
+    const cloudUrl = await uploadEncryptedBuffer(blobName, encryptedBuffer, mimeType);
+
+    const containerName = process.env.AZURE_CONTAINER_NAME || "genomic-files";
+
+    // ── 5. Save metadata to MongoDB (WITHOUT the AES key) ─────
+    const genomicFile = await GenomicFile.create({
+      owner:              userId,
+      originalName,
+      storedName:         blobName,
+      extension:          ext,
+      sizeBytes:          rawBuffer.length,   // store ORIGINAL size
+      mimeType,
+      azureBlobName:      blobName,
+      azureContainerName: containerName,
+      cloudUrl,
+      isEncrypted:        true,
+      encryptionIv:       ivHex,              // IV is safe in DB (not secret)
+      ipfsStatus:         "pending",
+      description:        description || "",
+    });
+
+    // ── 6. Store AES key in Azure Key Vault ────────────────
+    //    Key is stored AFTER the file record exists so we have a stable ID
+    await storeEncryptionKey(String(genomicFile._id), aesKeyHex);
+    console.log(`[Upload] AES key stored in Key Vault for file: ${genomicFile._id}`);
+
+    // Clear key from memory immediately after Key Vault storage
+    // (JS GC will collect — no explicit zeroing needed in Node.js)
+
+    // ── 7. Trigger async IPFS backup of encrypted blob ──────
+    setImmediate(async () => {
+      try {
+        await GenomicFile.findByIdAndUpdate(genomicFile._id, { ipfsStatus: "uploading" });
+        const { cid, ipfsUrl } = await uploadToIPFS(
+          blobName, originalName, mimeType, rawBuffer.length
+        );
+        await GenomicFile.findByIdAndUpdate(genomicFile._id, {
+          ipfsCid:    cid,
+          ipfsUrl,
+          ipfsStatus: "done",
+        });
+        console.log(`[IPFS] ✅ Backed up encrypted ${blobName} → CID: ${cid}`);
+      } catch (ipfsErr) {
+        console.error(`[IPFS] ❌ Backup failed for ${blobName}:`, ipfsErr.message);
+        await GenomicFile.findByIdAndUpdate(genomicFile._id, { ipfsStatus: "failed" });
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "File encrypted and uploaded successfully. IPFS backup running in background.",
+      file: {
+        id:          genomicFile._id,
+        originalName,
+        sizeBytes:   rawBuffer.length,
+        isEncrypted: true,
+        cloudUrl,
+        ipfsStatus:  "pending",
+        uploadedAt:  genomicFile.createdAt,
+      },
+    });
+  } catch (err) {
+    console.error("[uploadEncryptedFile]", err);
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({
+        success: false,
+        message: `File too large. Maximum size is ${process.env.MAX_FILE_SIZE_MB || 500} MB`,
+      });
+    }
+    return res.status(500).json({ success: false, message: "Encrypted upload failed" });
+  }
 };
 
 /* ─────────────────────────────────────────────────────────────────
@@ -303,8 +443,15 @@ const deleteFile = async (req, res) => {
       // Non-fatal — IPFS deletion is best-effort
     }
 
-    // 4. Remove from MongoDB
+    // 4. Remove from MongoDB + Key Vault key
     await GenomicFile.findByIdAndDelete(id);
+
+    // Delete the encryption key from Key Vault (best-effort)
+    try {
+      await deleteEncryptionKey(id);
+    } catch (kvErr) {
+      console.warn(`[KeyVault] Could not delete key for ${id}:`, kvErr.message);
+    }
 
     return res.status(200).json({
       success: true,
@@ -372,4 +519,4 @@ const retryIpfs = async (req, res) => {
   }
 };
 
-module.exports = { getUploadUrl, confirmUpload, getMyFiles, getIpfsStatus, deleteFile, retryIpfs };
+module.exports = { uploadEncryptedFile, upload, getUploadUrl, confirmUpload, getMyFiles, getIpfsStatus, deleteFile, retryIpfs };

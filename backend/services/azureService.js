@@ -196,6 +196,51 @@ const configureCors = async () => {
   }
 };
 
+/**
+ * uploadEncryptedBuffer
+ * ─────────────────────
+ * Uploads a pre-encrypted Buffer directly from the backend to Azure.
+ * Used in the server-side encryption upload flow.
+ *
+ * @param {string} blobName      - Unique blob name (same as stored in GenomicFile)
+ * @param {Buffer} encryptedBuf  - AES-256-CBC encrypted file bytes
+ * @param {string} contentType   - MIME type of the original file
+ * @returns {Promise<string>}    - Full blob URL
+ */
+const uploadEncryptedBuffer = async (blobName, encryptedBuf, contentType = "application/octet-stream") => {
+  const client          = getBlobServiceClient();
+  const containerClient = client.getContainerClient(CONTAINER_NAME);
+  const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+  await blockBlobClient.uploadData(encryptedBuf, {
+    blobHTTPHeaders: { blobContentType: contentType },
+  });
+
+  return `https://${ACCOUNT_NAME}.blob.core.windows.net/${CONTAINER_NAME}/${blobName}`;
+};
+
+/**
+ * downloadBlobToBuffer
+ * ────────────────────
+ * Downloads a blob from Azure and returns its bytes as a Buffer.
+ * Used during decryption: fetch encrypted bytes → decrypt → stream to researcher.
+ *
+ * @param {string} blobName
+ * @returns {Promise<Buffer>}
+ */
+const downloadBlobToBuffer = async (blobName) => {
+  const client          = getBlobServiceClient();
+  const containerClient = client.getContainerClient(CONTAINER_NAME);
+  const blobClient      = containerClient.getBlobClient(blobName);
+  const downloadResp    = await blobClient.download(0);
+  const stream          = downloadResp.readableStreamBody;
+  const chunks          = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+};
+
 module.exports = {
   generateUploadSasToken,
   verifyBlobExists,
@@ -203,4 +248,6 @@ module.exports = {
   getReadableBlobStream,
   ensureContainerExists,
   configureCors,
+  uploadEncryptedBuffer,
+  downloadBlobToBuffer,
 };

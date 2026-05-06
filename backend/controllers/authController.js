@@ -1,5 +1,11 @@
-const jwt = require("jsonwebtoken");
+const jwt    = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const { randomInt } = require("crypto");
 const User = require("../models/User");
+const OTP  = require("../models/OTP");
+const { sendOTPEmail } = require("../services/emailService");
+const { storePinHash, retrievePinHash } = require("../services/keyVaultService");
+
 
 /* ─────────────────────────────────────────────────────────────
    Helper: Generate a signed JWT for a user
@@ -186,4 +192,211 @@ const getMe = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe };
+/* ─────────────────────────────────────────────────────────────
+   POST /api/auth/forgot-password
+   Body: { email }
+   Sends a 6-digit reset OTP to the user's email.
+───────────────────────────────────────────────────────────── */
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    // Always return 200 — prevents email enumeration attacks
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If this email is registered, a reset code has been sent.",
+      });
+    }
+
+    // Delete any existing reset OTP for this user
+    await OTP.deleteMany({ userId: user._id, purpose: "reset" });
+
+    // Generate and persist a new OTP
+    const code = randomInt(100000, 1000000).toString();
+    await OTP.create({
+      userId: user._id,
+      email:  user.email,
+      code,
+      purpose: "reset",
+    });
+
+    // Send the email (reuse existing email service)
+    try {
+      await sendOTPEmail(user.email, code, user.name);
+    } catch (emailErr) {
+      console.error("[forgotPassword] email error:", emailErr.message);
+    }
+
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[RESET OTP] ${user.email}: ${code}`);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "If this email is registered, a reset code has been sent.",
+    });
+  } catch (err) {
+    console.error("[forgotPassword]", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/* ─────────────────────────────────────────────────────────────
+   POST /api/auth/reset-password
+   Body: { email, code, newPassword }
+   Verifies the reset OTP then updates the user's password.
+───────────────────────────────────────────────────────────── */
+const resetPassword = async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ success: false, message: "Email, code, and new password are required" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+    }
+
+    // Find the reset OTP record
+    const otpRecord = await OTP.findOne({
+      email:   email.toLowerCase(),
+      purpose: "reset",
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset code has expired or was never requested. Please start over.",
+      });
+    }
+
+    if (otpRecord.code !== code) {
+      return res.status(400).json({ success: false, message: "Incorrect reset code. Try again." });
+    }
+
+    // OTP is valid — find the user and update the password
+    const user = await User.findById(otpRecord.userId).select("+password");
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    user.password = newPassword; // pre-save hook will hash it
+    await user.save({ validateModifiedOnly: true });
+
+    // Consume the OTP (single use)
+    await OTP.deleteOne({ _id: otpRecord._id });
+
+    return res.status(200).json({ success: true, message: "Password reset successfully. You can now log in." });
+  } catch (err) {
+    console.error("[resetPassword]", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/* ─────────────────────────────────────────────────────────────
+   POST /api/auth/set-pin
+   Protected — authenticated users only
+   Body: { pin }  (exactly 6 digits)
+
+   First-time PIN setup:
+     1. Validate it is exactly 6 digits
+     2. bcrypt-hash the raw pin (BCRYPT_ROUNDS from env)
+     3. Store the hash in Azure Key Vault  (genovault-pin-<userId>)
+     4. Mark pinSet: true in MongoDB
+     — Raw PIN digit string is NEVER persisted anywhere —
+───────────────────────────────────────────────────────────── */
+const setPin = async (req, res) => {
+  try {
+    const { pin } = req.body;
+    const userId  = req.user.userId;
+
+    if (!pin || !/^\d{6}$/.test(pin)) {
+      return res.status(400).json({ success: false, message: "PIN must be exactly 6 digits" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    // Hash the raw PIN before sending to Key Vault
+    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+    const pinHash    = await bcrypt.hash(pin, saltRounds);
+
+    // Store hash in Azure Key Vault (raw PIN is never stored anywhere)
+    await storePinHash(String(userId), pinHash);
+
+    // Mark pinSet = true in MongoDB
+    user.pinSet = true;
+    await user.save({ validateModifiedOnly: true });
+
+    return res.status(200).json({ success: true, message: "PIN set successfully." });
+  } catch (err) {
+    console.error("[setPin]", err);
+    return res.status(500).json({ success: false, message: "Failed to set PIN" });
+  }
+};
+
+/* ─────────────────────────────────────────────────────────────
+   POST /api/auth/change-pin
+   Protected — authenticated users only
+   Body: { currentPin, newPin }
+
+   Secure PIN change:
+     1. Retrieve current bcrypt hash from Key Vault
+     2. Compare currentPin with stored hash
+     3. If correct: hash newPin and overwrite Key Vault secret
+───────────────────────────────────────────────────────────── */
+const changePin = async (req, res) => {
+  try {
+    const { currentPin, newPin } = req.body;
+    const userId = req.user.userId;
+
+    if (!currentPin || !newPin) {
+      return res.status(400).json({ success: false, message: "currentPin and newPin are required" });
+    }
+    if (!/^\d{6}$/.test(currentPin) || !/^\d{6}$/.test(newPin)) {
+      return res.status(400).json({ success: false, message: "Both PINs must be exactly 6 digits" });
+    }
+    if (currentPin === newPin) {
+      return res.status(400).json({ success: false, message: "New PIN must be different from the current PIN" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user.pinSet) {
+      return res.status(400).json({ success: false, message: "No PIN is set. Use /set-pin first." });
+    }
+
+    // Retrieve current hash from Key Vault
+    let currentHash;
+    try {
+      currentHash = await retrievePinHash(String(userId));
+    } catch {
+      return res.status(400).json({ success: false, message: "Could not retrieve current PIN. Please contact support." });
+    }
+
+    // Verify current PIN
+    const isMatch = await bcrypt.compare(currentPin, currentHash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: "Current PIN is incorrect" });
+    }
+
+    // Hash and store the new PIN
+    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+    const newPinHash = await bcrypt.hash(newPin, saltRounds);
+    await storePinHash(String(userId), newPinHash);
+
+    return res.status(200).json({ success: true, message: "PIN changed successfully." });
+  } catch (err) {
+    console.error("[changePin]", err);
+    return res.status(500).json({ success: false, message: "Failed to change PIN" });
+  }
+};
+
+module.exports = { register, login, getMe, forgotPassword, resetPassword, setPin, changePin };

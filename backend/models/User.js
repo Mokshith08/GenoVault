@@ -44,13 +44,8 @@ const userSchema = new mongoose.Schema(
       required: [true, "Role is required"],
     },
 
-    // Security PIN (6-digit, stored as bcrypt hash)
-    pin: {
-      type: String,
-      select: false,
-    },
-
     // Whether the user has set up their PIN
+    // The bcrypt hash of the PIN is stored in Azure Key Vault (NOT here)
     pinSet: {
       type: Boolean,
       default: false,
@@ -96,13 +91,6 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-/* ─────────────────────────────────────────────────────────────
-   Instance method: Compare a plain-text PIN with the stored hash
-───────────────────────────────────────────────────────────── */
-userSchema.methods.comparePin = async function (candidatePin) {
-  if (!this.pin) return false;
-  return bcrypt.compare(candidatePin, this.pin);
-};
 
 /* ─────────────────────────────────────────────────────────────
    Transform: Remove sensitive fields when converting to JSON
@@ -111,7 +99,6 @@ userSchema.methods.comparePin = async function (candidatePin) {
 userSchema.set("toJSON", {
   transform: (_, ret) => {
     delete ret.password;
-    delete ret.pin;
     delete ret.mfa_secret; // Never expose raw TOTP secret
     delete ret.__v;
     return ret;

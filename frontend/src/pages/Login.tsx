@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Eye, EyeOff, Loader2, Mail, Lock, ShieldCheck, Smartphone, KeyRound, ArrowLeft } from "lucide-react";
+import { Eye, EyeOff, Loader2, Mail, Lock, ShieldCheck, Smartphone, KeyRound, ArrowLeft, X, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,66 @@ const Login = () => {
   const [errors, setErrors]     = useState<{ email?: string; password?: string }>({});
   const [loading, setLoading]   = useState(false);
   const [resending, setResending] = useState(false);
+
+  // ── Forgot password modal state ───────────────────────────
+  type FpStep = "email" | "otp" | "password" | "done";
+  const [fpOpen, setFpOpen]       = useState(false);
+  const [fpStep, setFpStep]       = useState<FpStep>("email");
+  const [fpEmail, setFpEmail]     = useState("");
+  const [fpOtp, setFpOtp]         = useState("");
+  const [fpNewPw, setFpNewPw]     = useState("");
+  const [fpConfirm, setFpConfirm] = useState("");
+  const [fpShowPw, setFpShowPw]   = useState(false);
+  const [fpLoading, setFpLoading] = useState(false);
+
+  const openForgot = () => {
+    setFpOpen(true); setFpStep("email"); setFpEmail("");
+    setFpOtp(""); setFpNewPw(""); setFpConfirm("");
+  };
+  const closeForgot = () => setFpOpen(false);
+
+  const fpSendOtp = async () => {
+    if (!fpEmail) { toast.error("Enter your email"); return; }
+    setFpLoading(true);
+    try {
+      const res  = await fetch(`${API}/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fpEmail }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed");
+      toast.success("Reset code sent — check your email");
+      setFpStep("otp");
+    } catch (e: any) { toast.error(e.message); }
+    finally { setFpLoading(false); }
+  };
+
+  const fpVerifyOtp = async () => {
+    if (fpOtp.length !== 6) { toast.error("Enter all 6 digits"); return; }
+    setFpLoading(true);
+    try {
+      // We just move to the password step; actual verification happens on reset
+      setFpStep("password");
+    } finally { setFpLoading(false); }
+  };
+
+  const fpReset = async () => {
+    if (fpNewPw.length < 8) { toast.error("Password must be at least 8 characters"); return; }
+    if (fpNewPw !== fpConfirm) { toast.error("Passwords do not match"); return; }
+    setFpLoading(true);
+    try {
+      const res  = await fetch(`${API}/auth/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fpEmail, code: fpOtp, newPassword: fpNewPw }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Reset failed");
+      setFpStep("done");
+    } catch (e: any) { toast.error(e.message); }
+    finally { setFpLoading(false); }
+  };
 
   // Holds verified user data between step 1 and step 2
   const [verifiedUser, setVerifiedUser] = useState<{
@@ -180,6 +240,7 @@ const Login = () => {
 
   /* ─────────────────────────────────────────────────────────── */
   return (
+    <>
     <AuthLayout
       title={
         step === "form"
@@ -223,7 +284,7 @@ const Login = () => {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="login-password">Password</Label>
-              <a href="#" className="text-xs text-muted-foreground hover:text-primary">Forgot?</a>
+              <button type="button" onClick={openForgot} className="text-xs text-muted-foreground hover:text-primary transition-colors">Forgot password?</button>
             </div>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -383,6 +444,159 @@ const Login = () => {
         </AnimatePresence>
       )}
     </AuthLayout>
+
+    {/* ── Forgot Password Modal ───────────────────────────── */}
+    <AnimatePresence>
+      {fpOpen && (
+        <motion.div
+          key="fp-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(6px)" }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeForgot(); }}
+        >
+          <motion.div
+            key="fp-card"
+            initial={{ opacity: 0, scale: 0.94, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 16 }}
+            transition={{ duration: 0.22 }}
+            className="relative w-full max-w-md rounded-2xl p-8 shadow-2xl"
+            style={{
+              background: "linear-gradient(145deg, hsl(var(--card)) 0%, hsl(var(--background)) 100%)",
+              border: "1px solid hsl(var(--border))",
+            }}
+          >
+            {/* Close button */}
+            <button
+              onClick={closeForgot}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <AnimatePresence mode="wait">
+              {/* ── Step 1: Email ── */}
+              {fpStep === "email" && (
+                <motion.div key="fp-email" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5">
+                  <div className="space-y-1">
+                    <h2 className="text-xl font-semibold">Forgot password?</h2>
+                    <p className="text-sm text-muted-foreground">Enter your account email and we'll send a reset code.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="fp-email">Email address</Label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="fp-email"
+                        type="email"
+                        placeholder="you@institution.org"
+                        value={fpEmail}
+                        onChange={e => setFpEmail(e.target.value)}
+                        onKeyDown={e => e.key === "Enter" && fpSendOtp()}
+                        className="pl-9 h-11"
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={fpSendOtp} disabled={fpLoading} className="w-full h-11 bg-gradient-primary hover:opacity-90">
+                    {fpLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending...</> : "Send Reset Code"}
+                  </Button>
+                </motion.div>
+              )}
+
+              {/* ── Step 2: OTP ── */}
+              {fpStep === "otp" && (
+                <motion.div key="fp-otp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5">
+                  <div className="space-y-1">
+                    <h2 className="text-xl font-semibold">Enter reset code</h2>
+                    <p className="text-sm text-muted-foreground">We sent a 6-digit code to <strong>{fpEmail}</strong>.</p>
+                  </div>
+                  <div className="flex justify-center">
+                    <InputOTP maxLength={6} value={fpOtp} onChange={setFpOtp}>
+                      <InputOTPGroup>
+                        {Array.from({ length: 6 }).map((_, i) => (
+                          <InputOTPSlot key={i} index={i} className="h-12 w-12 text-lg" />
+                        ))}
+                      </InputOTPGroup>
+                    </InputOTP>
+                  </div>
+                  <Button onClick={fpVerifyOtp} disabled={fpLoading || fpOtp.length !== 6} className="w-full h-11 bg-gradient-primary hover:opacity-90">
+                    {fpLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Checking...</> : "Continue"}
+                  </Button>
+                  <button onClick={() => setFpStep("email")} className="w-full text-xs text-center text-muted-foreground hover:text-primary flex items-center justify-center gap-1">
+                    <ArrowLeft className="h-3 w-3" /> Change email
+                  </button>
+                </motion.div>
+              )}
+
+              {/* ── Step 3: New password ── */}
+              {fpStep === "password" && (
+                <motion.div key="fp-pw" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5">
+                  <div className="space-y-1">
+                    <h2 className="text-xl font-semibold">Set new password</h2>
+                    <p className="text-sm text-muted-foreground">Choose a strong password (min. 8 characters).</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="fp-newpw">New password</Label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="fp-newpw"
+                        type={fpShowPw ? "text" : "password"}
+                        placeholder="••••••••"
+                        value={fpNewPw}
+                        onChange={e => setFpNewPw(e.target.value)}
+                        className="pl-9 pr-10 h-11"
+                      />
+                      <button type="button" onClick={() => setFpShowPw(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                        {fpShowPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="fp-confirm">Confirm password</Label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="fp-confirm"
+                        type={fpShowPw ? "text" : "password"}
+                        placeholder="••••••••"
+                        value={fpConfirm}
+                        onChange={e => setFpConfirm(e.target.value)}
+                        onKeyDown={e => e.key === "Enter" && fpReset()}
+                        className="pl-9 h-11"
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={fpReset} disabled={fpLoading} className="w-full h-11 bg-gradient-primary hover:opacity-90">
+                    {fpLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Resetting...</> : "Reset Password"}
+                  </Button>
+                </motion.div>
+              )}
+
+              {/* ── Step 4: Done ── */}
+              {fpStep === "done" && (
+                <motion.div key="fp-done" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="space-y-5 text-center">
+                  <div className="flex justify-center">
+                    <div className="h-16 w-16 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                      <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <h2 className="text-xl font-semibold">Password reset!</h2>
+                    <p className="text-sm text-muted-foreground">Your password has been updated. You can now sign in.</p>
+                  </div>
+                  <Button onClick={closeForgot} className="w-full h-11 bg-gradient-primary hover:opacity-90">Back to Login</Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </>
   );
 };
 
