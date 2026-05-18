@@ -57,8 +57,10 @@ const generateUploadSasToken = (blobName, expiryMins = 30) => {
     ACCOUNT_KEY
   );
 
-  const startsOn  = new Date();
-  const expiresOn = new Date(startsOn.getTime() + expiryMins * 60 * 1000);
+  // Start 2 minutes in the past to handle clock skew between
+  // local machine and Azure servers (prevents "signature invalid" errors)
+  const startsOn  = new Date(Date.now() - 2 * 60 * 1000);
+  const expiresOn = new Date(Date.now() + expiryMins * 60 * 1000);
 
   // Write-only permissions — frontend can upload but not read/list
   const permissions = new BlobSASPermissions();

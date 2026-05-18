@@ -177,13 +177,15 @@ const getMe = async (req, res) => {
     return res.status(200).json({
       success: true,
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        pinSet: user.pinSet,
-        createdAt: user.createdAt,
-        lastLogin: user.lastLogin,
+        id:               user._id,
+        name:             user.name,
+        email:            user.email,
+        role:             user.role,
+        pinSet:           user.pinSet,
+        profileCompleted: user.profileCompleted,
+        researcherProfile: user.researcherProfile,
+        createdAt:        user.createdAt,
+        lastLogin:        user.lastLogin,
       },
     });
   } catch (err) {
@@ -399,4 +401,60 @@ const changePin = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, forgotPassword, resetPassword, setPin, changePin };
+/* ─────────────────────────────────────────────────────────────
+   PUT /api/auth/researcher-profile
+   Protected – researcher role only
+   Body: all researcherProfile fields
+───────────────────────────────────────────────────────────── */
+const updateResearcherProfile = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const user   = await User.findById(userId);
+
+    if (!user)
+      return res.status(404).json({ success: false, message: "User not found" });
+    if (user.role !== "researcher")
+      return res.status(403).json({ success: false, message: "Only researchers can update this profile" });
+
+    const {
+      institution, department, designation, researchArea,
+      experience, country, phone, linkedIn, orcid, bio, purpose,
+    } = req.body;
+
+    // Require the essential fields
+    if (!institution || !designation || !researchArea || !purpose) {
+      return res.status(400).json({
+        success: false,
+        message: "institution, designation, researchArea and purpose are required",
+      });
+    }
+
+    user.researcherProfile = {
+      institution:  institution?.trim(),
+      department:   department?.trim(),
+      designation:  designation?.trim(),
+      researchArea: researchArea?.trim(),
+      experience:   experience?.trim(),
+      country:      country?.trim(),
+      phone:        phone?.trim(),
+      linkedIn:     linkedIn?.trim(),
+      orcid:        orcid?.trim(),
+      bio:          bio?.trim(),
+      purpose:      purpose?.trim(),
+    };
+    user.profileCompleted = true;
+    await user.save();
+
+    return res.status(200).json({
+      success:          true,
+      message:          "Profile saved successfully",
+      profileCompleted: true,
+      researcherProfile: user.researcherProfile,
+    });
+  } catch (err) {
+    console.error("[updateResearcherProfile]", err);
+    return res.status(500).json({ success: false, message: "Failed to save profile" });
+  }
+};
+
+module.exports = { register, login, getMe, forgotPassword, resetPassword, setPin, changePin, updateResearcherProfile };

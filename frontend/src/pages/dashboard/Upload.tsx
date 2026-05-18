@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud, FileText, X, CheckCircle2, Loader2, AlertCircle,
   Cloud, Database, Dna, Copy, RefreshCw, Layers, Trash2,
-  Zap, Shield, Globe, XCircle, TriangleAlert
+  Zap, Shield, Globe, XCircle, TriangleAlert, Eye, Lock, Unlock
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/dashboard/PageHeader";
@@ -103,6 +103,137 @@ const DeleteModal = ({ fileName, onConfirm, onCancel }: DeleteModalProps) => (
   </AnimatePresence>
 );
 
+// ── File Preview Modal ────────────────────────────────────────────────────
+type PreviewByte = { hex: string; dec: number };
+interface PreviewData {
+  fileName:      string;
+  isEncrypted:   boolean;
+  encryptionIv:  string;
+  algorithm:     string;
+  previewBytes:  number;
+  encrypted:     PreviewByte[];
+  decrypted:     PreviewByte[] | null;
+}
+
+const HexGrid = ({ bytes, mode }: { bytes: PreviewByte[]; mode: "enc" | "dec" }) => {
+  const ROW = 16;
+  const rows: PreviewByte[][] = [];
+  for (let i = 0; i < bytes.length; i += ROW) rows.push(bytes.slice(i, i + ROW));
+  const BAM_MAGIC = ["42","41","4d","01"];
+  return (
+    <div style={{ fontFamily: "'JetBrains Mono','Fira Code',monospace", fontSize: 11, lineHeight: 1.7 }}>
+      {rows.map((row, ri) => (
+        <div key={ri} className="flex gap-3 px-2 rounded hover:bg-white/5">
+          <span style={{ color:"#475569", minWidth:68, flexShrink:0 }}>
+            {(ri * ROW).toString(16).padStart(8,"0")}
+          </span>
+          <span className="flex flex-wrap gap-[3px]" style={{ minWidth:310 }}>
+            {row.map((b, ci) => {
+              const magic = mode==="dec" && ri===0 && ci<4 && BAM_MAGIC[ci]===b.hex;
+              return (
+                <span key={ci} style={{
+                  color:   magic ? "#10b981" : mode==="dec" ? "#94a3b8" : "#f97316",
+                  fontWeight: magic ? 700 : 400,
+                  background: magic ? "rgba(16,185,129,.15)" : "transparent",
+                  borderRadius: 2, padding: "0 1px",
+                }}>{b.hex}</span>
+              );
+            })}
+          </span>
+          <span style={{ color:"#475569", borderLeft:"1px solid rgba(255,255,255,0.06)", paddingLeft:8, flexShrink:0 }}>
+            {row.map(b=>(b.dec>=0x20&&b.dec<0x7f)?String.fromCharCode(b.dec):".").join("")}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const PreviewModal = ({ data, onClose }: { data: PreviewData; onClose: ()=>void }) => {
+  const [tab, setTab] = useState<"enc"|"dec">("enc");
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        style={{ background:"rgba(0,0,0,0.78)", backdropFilter:"blur(6px)" }}
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ opacity:0, scale:0.93, y:20 }}
+          animate={{ opacity:1, scale:1,    y:0  }}
+          exit={{   opacity:0, scale:0.93, y:20 }}
+          transition={{ type:"spring", stiffness:340, damping:28 }}
+          onClick={e=>e.stopPropagation()}
+          className="w-full max-w-3xl rounded-2xl overflow-hidden shadow-2xl flex flex-col"
+          style={{ background:"linear-gradient(145deg,#0f0f1a,#12122a)", border:"1px solid rgba(99,102,241,.25)", maxHeight:"88vh" }}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between p-5" style={{ borderBottom:"1px solid rgba(255,255,255,.07)" }}>
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Lock className="h-4 w-4 text-indigo-400" />
+                <span className="text-xs font-bold text-indigo-300 uppercase tracking-widest">File Content Preview</span>
+              </div>
+              <p className="text-xs text-muted-foreground font-mono truncate max-w-md">{data.fileName}</p>
+              <div className="flex items-center gap-3 mt-2 flex-wrap">
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ background:"rgba(16,185,129,.12)", color:"#10b981", border:"1px solid rgba(16,185,129,.25)" }}>
+                  <CheckCircle2 className="h-2.5 w-2.5" />{data.algorithm}
+                </span>
+                <span className="text-xs text-muted-foreground">IV: <code className="text-indigo-300 text-xs">{data.encryptionIv?.slice(0,16)}…</code></span>
+                <span className="text-xs text-muted-foreground">First {data.previewBytes} bytes</span>
+              </div>
+            </div>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex gap-1 px-5 pt-3">
+            {[{key:"enc" as const, icon:Lock,   label:"Encrypted — Azure blob",        color:"#f97316", bg:"rgba(249,115,22,.12)",  border:"rgba(249,115,22,.3)" },
+              {key:"dec" as const, icon:Unlock, label:"Decrypted — original content",  color:"#10b981", bg:"rgba(16,185,129,.12)", border:"rgba(16,185,129,.3)" }]
+            .map(t => (
+              <button key={t.key}
+                onClick={() => (t.key==="dec" && !data.decrypted) ? undefined : setTab(t.key)}
+                disabled={t.key==="dec" && !data.decrypted}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-t-xl text-xs font-semibold transition-all
+                  ${tab===t.key ? "" : "text-muted-foreground hover:text-foreground"}
+                  ${t.key==="dec" && !data.decrypted ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                style={tab===t.key ? { color:t.color, background:t.bg, border:`1px solid ${t.border}`, borderBottom:`1px solid #0f0f1a` } : {}}
+              >
+                <t.icon className="h-3 w-3" />{t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Hex body */}
+          <div className="flex-1 overflow-auto p-4 mx-1 mb-1 rounded-xl"
+            style={{ background:"rgba(0,0,0,.35)",
+              border: tab==="enc" ? "1px solid rgba(249,115,22,.15)" : "1px solid rgba(16,185,129,.15)" }}>
+            <div className="flex gap-3 px-2 mb-2 pb-1" style={{ borderBottom:"1px solid rgba(255,255,255,.06)", fontSize:10, color:"#475569" }}>
+              <span style={{ minWidth:68 }}>OFFSET</span>
+              <span style={{ minWidth:310 }}>HEX BYTES</span>
+              <span className="pl-2" style={{ borderLeft:"1px solid rgba(255,255,255,.06)" }}>ASCII</span>
+            </div>
+            {tab==="enc" && <HexGrid bytes={data.encrypted} mode="enc" />}
+            {tab==="dec" && data.decrypted && <HexGrid bytes={data.decrypted} mode="dec" />}
+          </div>
+
+          {/* Footer */}
+          <div className="px-5 py-2.5 text-xs" style={{ borderTop:"1px solid rgba(255,255,255,.05)",
+            color: tab==="enc" ? "#f97316" : "#10b981" }}>
+            {tab==="enc"
+              ? "🔐 Azure stores this — AES-256-CBC ciphertext. No BAM/FASTQ structure visible. First 4 bytes: " + data.encrypted.slice(0,4).map(b=>b.hex).join(" ")
+              : "✅ Decrypted with AES key (Key Vault) + IV (MongoDB). BAM magic ‘" + (data.decrypted?.slice(0,4).map(b=>b.hex).join(" ") ?? "") + "’ matches 42 41 4d 01"}
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 const API_BASE = "http://localhost:5000/api";
 const ALLOWED_EXTENSIONS = [".fastq", ".bam", ".vcf"];
 
@@ -129,8 +260,8 @@ const phaseLabel: Record<UploadState["phase"], string> = {
   idle:       "",
   requesting: "Getting secure upload token…",
   uploading:  "Uploading to Azure Blob Storage…",
-  confirming: "Saving metadata & starting IPFS backup…",
-  done:       "Upload complete!",
+  confirming: "Saving metadata… AES-256 encryption will start in background.",
+  done:       "Upload complete! AES-256 encryption running in background.",
   error:      "Upload failed",
 };
 
@@ -209,6 +340,8 @@ const Upload = () => {
   const [loadingFiles, setLoadingFiles]   = useState(true);
   const [deletingId, setDeletingId]       = useState<string | null>(null);
   const [retryingId, setRetryingId]       = useState<string | null>(null);
+  const [previewData, setPreviewData]     = useState<PreviewData | null>(null);
+  const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -370,8 +503,28 @@ const Upload = () => {
 
   const isUploading = !["idle", "done", "error"].includes(state.phase);
 
+  /* ── Preview (eye button) ─────────────────────────────────── */
+  const openPreview = async (fileId: string) => {
+    setLoadingPreviewId(fileId);
+    try {
+      const res  = await fetch(`${API_BASE}/files/${fileId}/preview`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) setPreviewData(data);
+      else toast.error(data.message || "Preview failed");
+    } catch {
+      toast.error("Could not load preview");
+    } finally {
+      setLoadingPreviewId(null);
+    }
+  };
+
   return (
     <>
+      {/* Preview modal */}
+      {previewData && <PreviewModal data={previewData} onClose={() => setPreviewData(null)} />}
+
       {/* Custom delete confirmation modal */}
       {pendingDelete && (
         <DeleteModal
@@ -651,6 +804,19 @@ const Upload = () => {
                       {formatBytes(f.sizeBytes)} · {new Date(f.createdAt).toLocaleDateString()}
                     </p>
                   </div>
+
+                  {/* Eye preview button */}
+                  <button
+                    onClick={() => openPreview(f.id)}
+                    disabled={loadingPreviewId === f.id}
+                    title="Preview file content (encrypted vs decrypted)"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity
+                      text-muted-foreground hover:text-indigo-400 disabled:opacity-50"
+                  >
+                    {loadingPreviewId === f.id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Eye className="h-4 w-4" />}
+                  </button>
 
                   {/* Azure confirmation badge (no external link) */}
                   <AzureBadge />

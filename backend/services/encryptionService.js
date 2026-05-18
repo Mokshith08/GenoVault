@@ -72,20 +72,36 @@ const decryptBuffer = (encryptedBuffer, keyHex, ivHex) => {
 };
 
 /**
- * streamToBuffer
- * ──────────────
- * Convenience helper: converts a Node.js Readable stream into a Buffer.
- * Used to download Azure blob bytes before decryption.
+ * decryptPartialBuffer
+ * ────────────────────
+ * Decrypts only the first N complete AES-CBC blocks (no padding check).
+ * Used for file previews — lets us decrypt the first 256 bytes without
+ * needing to download the entire file.
  *
- * @param {NodeJS.ReadableStream} stream
- * @returns {Promise<Buffer>}
+ * IMPORTANT: Input size must be a multiple of 16 bytes.
+ *
+ * @param {Buffer} encChunk - First N bytes of the encrypted blob (N % 16 === 0)
+ * @param {string} keyHex   - 64-char hex AES key
+ * @param {string} ivHex    - 32-char hex IV
+ * @returns {Buffer}        - Decrypted bytes (same length as input)
+ */
+const decryptPartialBuffer = (encChunk, keyHex, ivHex) => {
+  const key      = Buffer.from(keyHex, "hex");
+  const iv       = Buffer.from(ivHex,  "hex");
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAutoPadding(false);  // skip PKCS7 check — partial data only
+  return decipher.update(encChunk);
+};
+
+/**
+ * streamToBuffer — converts a Readable stream to a Buffer.
  */
 const streamToBuffer = (stream) =>
   new Promise((resolve, reject) => {
     const chunks = [];
-    stream.on("data",  (chunk) => chunks.push(chunk));
-    stream.on("end",   ()      => resolve(Buffer.concat(chunks)));
-    stream.on("error", (err)   => reject(err));
+    stream.on("data",  (c) => chunks.push(c));
+    stream.on("end",   ()  => resolve(Buffer.concat(chunks)));
+    stream.on("error", (e) => reject(e));
   });
 
 module.exports = {
@@ -93,5 +109,6 @@ module.exports = {
   generateIV,
   encryptBuffer,
   decryptBuffer,
+  decryptPartialBuffer,
   streamToBuffer,
 };

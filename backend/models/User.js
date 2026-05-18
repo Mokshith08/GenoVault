@@ -67,6 +67,26 @@ const userSchema = new mongoose.Schema(
     lastLogin: {
       type: Date,
     },
+
+    // Researcher-only: professional profile (filled on first login popup)
+    profileCompleted: {
+      type: Boolean,
+      default: false,
+    },
+
+    researcherProfile: {
+      institution:    { type: String, trim: true },
+      department:     { type: String, trim: true },
+      designation:    { type: String, trim: true },     // e.g. PhD Scholar, Associate Prof
+      researchArea:   { type: String, trim: true },     // e.g. Genomics, Oncology
+      experience:     { type: String, trim: true },     // years of experience
+      country:        { type: String, trim: true },
+      phone:          { type: String, trim: true },
+      linkedIn:       { type: String, trim: true },
+      orcid:          { type: String, trim: true },     // e.g. 0000-0002-1825-0097
+      bio:            { type: String, trim: true, maxlength: 500 },
+      purpose:        { type: String, trim: true, maxlength: 500 }, // why they need access
+    },
   },
   {
     timestamps: true, // Adds createdAt & updatedAt automatically

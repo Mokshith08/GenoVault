@@ -18,18 +18,47 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
+import { useEffect, useState } from "react";
+import { ResearcherProfileModal } from "./ResearcherProfileModal";
 
 export const ResearcherLayout = () => {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
+  // ── Profile completion state ──────────────────────────────────────────────
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const token = localStorage.getItem("genovault-token") || "";
+
+  useEffect(() => {
+    if (!token) return;
+    fetch("http://localhost:5000/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.user?.role === "researcher" && !data.user?.profileCompleted) {
+          setShowProfileModal(true);
+        }
+      })
+      .catch(() => { /* ignore – don't block UI */ });
+  }, [token]);
+
   if (!user) return <Navigate to="/login" replace />;
 
   return (
     <SidebarProvider>
-      {/* PIN setup modal – shown to new users who have no PIN yet */}
+      {/* PIN setup modal */}
       <PinSetupModal />
+
+      {/* Researcher profile popup – shows once on first login */}
+      {showProfileModal && (
+        <ResearcherProfileModal
+          token={token}
+          onSaved={() => setShowProfileModal(false)}
+        />
+      )}
+
       <div className="min-h-screen flex w-full bg-muted/30">
         <ResearcherSidebar />
 
@@ -58,7 +87,7 @@ export const ResearcherLayout = () => {
                         <span className="text-xs text-muted-foreground">Just now</span>
                       </div>
                       <p className="text-xs text-muted-foreground line-clamp-2">
-                        Your request for Global Oncology Genome Atlas has been approved! The 24h grant is active.
+                        Your request for Global Oncology Genome Atlas has been approved!
                       </p>
                     </DropdownMenuItem>
                     <DropdownMenuItem className="flex flex-col items-start gap-1 p-3 cursor-pointer">
@@ -67,22 +96,13 @@ export const ResearcherLayout = () => {
                         <span className="text-xs text-muted-foreground">3h ago</span>
                       </div>
                       <p className="text-xs text-muted-foreground line-clamp-2">
-                        A new cohort related to Alzheimer's research has been uploaded and is available for access requests.
-                      </p>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className="flex flex-col items-start gap-1 p-3 cursor-pointer">
-                      <div className="flex items-center justify-between w-full">
-                        <span className="font-medium text-sm">Session Expiring Soon</span>
-                        <span className="text-xs text-muted-foreground">1d ago</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground line-clamp-2">
-                        Your access to Cardiovascular Variant VCF is expiring in less than 2 hours.
+                        A new cohort related to Alzheimer's research has been uploaded.
                       </p>
                     </DropdownMenuItem>
                   </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem className="cursor-pointer justify-center text-primary focus:text-primary">
-                     View all notifications
+                    View all notifications
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -107,7 +127,7 @@ export const ResearcherLayout = () => {
                     <div className="flex flex-col space-y-1">
                       <p className="text-sm font-medium leading-none">{user.name || "Researcher"}</p>
                       <p className="text-xs leading-none text-muted-foreground">
-                        {user.email || 'researcher@example.com'}
+                        {user.email || "researcher@example.com"}
                       </p>
                     </div>
                   </DropdownMenuLabel>
@@ -121,7 +141,10 @@ export const ResearcherLayout = () => {
                     <span>Settings</span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className="cursor-pointer text-destructive focus:bg-destructive focus:text-destructive-foreground focus:opacity-90" onClick={() => { logout(); navigate("/"); }}>
+                  <DropdownMenuItem
+                    className="cursor-pointer text-destructive focus:bg-destructive focus:text-destructive-foreground focus:opacity-90"
+                    onClick={() => { logout(); navigate("/"); }}
+                  >
                     <LogOut className="mr-2 h-4 w-4" />
                     <span>Sign out</span>
                   </DropdownMenuItem>
