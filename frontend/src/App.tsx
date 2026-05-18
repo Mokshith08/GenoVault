@@ -25,6 +25,7 @@ import AccessedData from "./pages/researcher/AccessedData";
 import AuditLogs from "./pages/researcher/AuditLogs";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
+import ResearcherSettings from "./pages/ResearcherSettings";
 
 const queryClient = new QueryClient();
 
@@ -50,7 +51,7 @@ const App = () => (
                 <Route path="profile" element={<Profile />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
-              
+
               <Route path="/researcher" element={<ResearcherLayout />}>
                 <Route index element={<DashboardOverview />} />
                 <Route path="datasets" element={<AvailableDatasets />} />
@@ -58,7 +59,7 @@ const App = () => (
                 <Route path="accessed" element={<AccessedData />} />
                 <Route path="audit" element={<AuditLogs />} />
                 <Route path="profile" element={<Profile />} />
-                <Route path="settings" element={<Settings />} />
+                <Route path="settings" element={<ResearcherSettings />} />
               </Route>
 
               <Route path="*" element={<NotFound />} />
