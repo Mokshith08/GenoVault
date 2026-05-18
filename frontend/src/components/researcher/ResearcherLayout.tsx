@@ -80,25 +80,8 @@ export const ResearcherLayout = () => {
                 <DropdownMenuContent align="end" className="w-80 mt-1">
                   <DropdownMenuLabel className="font-semibold">Notifications</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <div className="max-h-80 overflow-auto">
-                    <DropdownMenuItem className="flex flex-col items-start gap-1 p-3 cursor-pointer">
-                      <div className="flex items-center justify-between w-full">
-                        <span className="font-medium text-sm">Access Request Approved</span>
-                        <span className="text-xs text-muted-foreground">Just now</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground line-clamp-2">
-                        Your request for Global Oncology Genome Atlas has been approved!
-                      </p>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className="flex flex-col items-start gap-1 p-3 cursor-pointer">
-                      <div className="flex items-center justify-between w-full">
-                        <span className="font-medium text-sm">New Dataset Available</span>
-                        <span className="text-xs text-muted-foreground">3h ago</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground line-clamp-2">
-                        A new cohort related to Alzheimer's research has been uploaded.
-                      </p>
-                    </DropdownMenuItem>
+                  <div className="px-4 py-6 text-center">
+                    <p className="text-sm text-muted-foreground">No notifications yet</p>
                   </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem className="cursor-pointer justify-center text-primary focus:text-primary">
