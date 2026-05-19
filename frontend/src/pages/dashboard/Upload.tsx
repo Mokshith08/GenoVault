@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useChunkedUpload, UploadState } from "@/hooks/useChunkedUpload";
+import { useAuth } from "@/contexts/AuthContext";
 
 // ── Custom Delete Confirmation Modal ─────────────────────────────────────
 interface DeleteModalProps {
@@ -347,7 +348,7 @@ const Upload = () => {
   const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { state, upload, cancel, reset } = useChunkedUpload();
-  const token = localStorage.getItem("genovault-token") || "";
+  const { token = "" } = useAuth();
 
   /* ── Fetch file list ──────────────────────────────────────── */
   const fetchFiles = useCallback(async () => {

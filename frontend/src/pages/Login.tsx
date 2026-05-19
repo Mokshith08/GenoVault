@@ -198,8 +198,12 @@ const Login = () => {
       }
 
       // ── Complete login ────────────────────────────────────
-      localStorage.setItem("genovault-token", verifiedUser.token);
-      login({ name: verifiedUser.name, email: verifiedUser.email, role: verifiedUser.role });
+      // Token stored in React state (AuthContext) only — NOT localStorage.
+      // The httpOnly cookie set by the backend handles persistence automatically.
+      login(
+        { name: verifiedUser.name, email: verifiedUser.email, role: verifiedUser.role },
+        verifiedUser.token,
+      );
       toast.success("Welcome back!");
       navigate(verifiedUser.role === "researcher" ? "/researcher" : "/dashboard");
     } catch (err: any) {

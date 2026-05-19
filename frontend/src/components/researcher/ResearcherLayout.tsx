@@ -22,13 +22,12 @@ import { useEffect, useState } from "react";
 import { ResearcherProfileModal } from "./ResearcherProfileModal";
 
 export const ResearcherLayout = () => {
-  const { user, logout } = useAuth();
+  const { user, token = "", logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
   // ── Profile completion state ──────────────────────────────────────────────
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const token = localStorage.getItem("genovault-token") || "";
 
   useEffect(() => {
     if (!token) return;

@@ -1,10 +1,11 @@
 require("dotenv").config();
 
-const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
-const morgan = require("morgan");
-const rateLimit = require("express-rate-limit");
+const express    = require("express");
+const cors       = require("cors");
+const helmet     = require("helmet");
+const morgan     = require("morgan");
+const rateLimit  = require("express-rate-limit");
+const cookieParser = require("cookie-parser");
 
 const connectDB = require("./config/db");
 
@@ -77,6 +78,7 @@ const mfaLimiter = rateLimit({
 // ── 4. Body parsers ───────────────────────────────────────────
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
+app.use(cookieParser()); // Parses incoming cookies (needed for httpOnly auth cookie)
 
 // ── 5. Request logging (dev only) ─────────────────────────────
 if (process.env.NODE_ENV === "development") {

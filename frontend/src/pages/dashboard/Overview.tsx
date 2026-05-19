@@ -12,10 +12,9 @@ import { useAuth } from "@/contexts/AuthContext";
 const API_BASE = "http://localhost:5000/api";
 
 const Overview = () => {
-  const { user } = useAuth();
+  const { user, token = "" } = useAuth();
   const navigate = useNavigate();
   const isOwner = user?.role === "owner";
-  const token = localStorage.getItem("genovault-token") || "";
 
   // Real file stats from backend
   const [fileCount, setFileCount]   = useState<number | null>(null);

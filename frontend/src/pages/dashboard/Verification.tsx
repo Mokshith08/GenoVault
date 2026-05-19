@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/dashboard/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/contexts/AuthContext";
 
 const API_BASE = "http://localhost:5000/api";
 
@@ -25,13 +26,12 @@ const formatBytes = (bytes: number): string => {
 };
 
 const Verification = () => {
+  const { token = "" } = useAuth();
   const [files, setFiles]         = useState<VerifiableFile[]>([]);
   const [loading, setLoading]     = useState(true);
   const [verifying, setVerifying] = useState<string | null>(null);
   // Results: fileId → true (verified) | false (tampered)
   const [results, setResults]     = useState<Record<string, boolean>>({});
-
-  const token = localStorage.getItem("genovault-token") || "";
 
   /* ── Fetch real files from backend ─────────────────────────── */
   const fetchFiles = useCallback(async () => {

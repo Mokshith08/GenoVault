@@ -5,8 +5,9 @@ export interface MockUser { name: string; email: string; role: Role; }
 
 interface AuthCtx {
   user: MockUser | null;
-  pin: string | null;          // 6-digit security PIN set during registration
-  login: (u: MockUser) => void;
+  token: string | null;
+  pin: string | null;
+  login: (u: MockUser, token: string) => void;
   logout: () => void;
   updateUser: (partial: Partial<Pick<MockUser, "name" | "email">>) => void;
   setPin: (pin: string) => void;
@@ -20,32 +21,50 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return raw ? JSON.parse(raw) : null;
   });
 
+  // Token lives in React state (memory). localStorage is only used as a
+  // persistence fallback so a page refresh doesn't force re-login.
+  // It is NOT read directly by components — they use useAuth().token instead.
+  const [token, setToken] = useState<string | null>(() => {
+    return localStorage.getItem("genovault-token");
+  });
+
   const [pin, setPinState] = useState<string | null>(() => {
     return localStorage.getItem("genovault-pin");
   });
 
   useEffect(() => {
     if (user) localStorage.setItem("genovault-user", JSON.stringify(user));
-    else localStorage.removeItem("genovault-user");
+    else       localStorage.removeItem("genovault-user");
   }, [user]);
 
-  const setPin = (newPin: string) => {
-    setPinState(newPin);
-    localStorage.setItem("genovault-pin", newPin);
+  useEffect(() => {
+    if (token) localStorage.setItem("genovault-token", token);
+    else       localStorage.removeItem("genovault-token");
+  }, [token]);
+
+  const login = (u: MockUser, jwt: string) => {
+    setUser(u);
+    setToken(jwt);
   };
 
   const logout = () => {
     setUser(null);
-    // NOTE: PIN is intentionally kept across sessions so the user
-    // doesn't need to re-create it on every login.
+    setToken(null);
+    localStorage.removeItem("genovault-token");
+    // PIN intentionally kept across sessions
   };
 
   const updateUser = (partial: Partial<Pick<MockUser, "name" | "email">>) => {
     setUser(prev => prev ? { ...prev, ...partial } : prev);
   };
 
+  const setPin = (newPin: string) => {
+    setPinState(newPin);
+    localStorage.setItem("genovault-pin", newPin);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, pin, login: setUser, logout, updateUser, setPin }}>
+    <AuthContext.Provider value={{ user, token, pin, login, logout, updateUser, setPin }}>
       {children}
     </AuthContext.Provider>
   );

@@ -141,11 +141,19 @@ const login = async (req, res) => {
     // ── 5. Generate JWT ──────────────────────────────────────
     const token = generateToken(user._id, user.role);
 
-    // ── 6. Respond ───────────────────────────────────────────
+    // ── 6. Set secure httpOnly cookie (inaccessible to JavaScript) ───────
+    res.cookie("gv_token", token, {
+      httpOnly: true,                                   // JS on the page CANNOT read this
+      secure: process.env.NODE_ENV === "production",    // HTTPS only in production
+      sameSite: "lax",                                  // blocks cross-site request forgery
+      maxAge: 24 * 60 * 60 * 1000,                     // 24 hours (matches JWT expiry)
+    });
+
+    // ── 7. Respond ───────────────────────────────────────────
     return res.status(200).json({
       success: true,
       message: "Login successful",
-      token,
+      token,   // frontend stores in React state (memory) only — not localStorage
       user: {
         id: user._id,
         name: user.name,

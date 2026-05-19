@@ -96,7 +96,7 @@ function ToggleRow({
 
 // ── Main Settings page ────────────────────────────────────────────────────────
 export default function Settings() {
-  const { user, logout } = useAuth();
+  const { user, token = "", logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -136,7 +136,7 @@ export default function Settings() {
   const [pinIsSet, setPinIsSet]     = useState(user?.pinSet ?? false);
 
   const API_BASE = "http://localhost:5000/api";
-  const getToken = () => localStorage.getItem("genovault-token") ?? "";
+  const getToken = () => token ?? "";
 
   const triggerShake = () => { setPinShake(true); setTimeout(() => setPinShake(false), 500); };
 

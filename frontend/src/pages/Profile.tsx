@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   User, Mail, Shield, Edit3, Save, X, Lock, CheckCircle2,
-  Camera, ShieldCheck, Loader2, RefreshCw,
+  Camera, ShieldCheck, Loader2, RefreshCw, Search,
   Building2, Globe, FlaskConical, BriefcaseBusiness,
   Phone, Linkedin, BookOpen, Hash, FileText, Award,
 } from "lucide-react";
@@ -15,6 +15,159 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+
+// ─── Autocomplete suggestion data ───────────────────────────────────────────
+const INSTITUTIONS = [
+  "IIT Bombay","IIT Delhi","IIT Madras","IIT Kanpur","IIT Kharagpur",
+  "IIT Roorkee","IIT Hyderabad","IIT Guwahati","IISc Bangalore",
+  "AIIMS New Delhi","AIIMS Bhopal","University of Delhi","University of Mumbai",
+  "Jawaharlal Nehru University","Banaras Hindu University","Vellore Institute of Technology",
+  "Centre for Cellular and Molecular Biology (CCMB)",
+  "Institute of Genomics and Integrative Biology (IGIB)",
+  "Harvard University","Stanford University","MIT","Johns Hopkins University",
+  "University of Cambridge","University of Oxford","Yale University",
+  "University of California San Francisco","University of Toronto",
+  "Karolinska Institute","ETH Zurich","Max Planck Institute",
+  "Broad Institute of MIT and Harvard","Wellcome Sanger Institute","NIH","CDC",
+];
+const DEPARTMENTS = [
+  "Biosciences","Genetics","Genomics","Biochemistry","Molecular Biology",
+  "Cell Biology","Microbiology","Biotechnology","Bioinformatics",
+  "Computational Biology","Computer Science","Biomedical Engineering",
+  "Biostatistics","Epidemiology","Pathology","Clinical Medicine",
+  "Pharmacology","Neuroscience","Immunology","Oncology",
+  "Structural Biology","Systems Biology","Public Health",
+  "Translational Medicine","Medical Genetics","Human Genetics",
+  "Data Science","Artificial Intelligence & Machine Learning",
+];
+const COUNTRIES = [
+  "India","United States","United Kingdom","Canada","Australia",
+  "Germany","France","Japan","China","South Korea",
+  "Singapore","Netherlands","Sweden","Switzerland","Israel",
+  "Brazil","South Africa","New Zealand","Italy","Spain",
+  "Norway","Denmark","Finland","Belgium","Austria",
+  "Portugal","Poland","Ireland","Greece","Turkey","UAE","Malaysia",
+];
+const DESIGNATIONS = [
+  "PhD Scholar","Post-Doctoral Researcher","Research Fellow",
+  "Junior Research Fellow (JRF)","Senior Research Fellow (SRF)",
+  "Lecturer","Assistant Professor","Associate Professor","Professor",
+  "Principal Investigator","Co-Investigator",
+  "Data Scientist","Bioinformatician","Clinical Researcher",
+  "Research Scientist","Staff Scientist","Group Leader",
+  "Director of Research","Chief Scientific Officer",
+  "Medical Officer","Clinician-Scientist","Lab Manager","Other",
+];
+const RESEARCH_AREAS = [
+  "Genomics","Proteomics","Transcriptomics","Metabolomics",
+  "Metagenomics","Single-cell Genomics","Epigenomics",
+  "Oncology / Cancer Genomics","Pharmacogenomics","Epigenetics",
+  "Population Genetics","Human Genetics","Evolutionary Genomics",
+  "Bioinformatics","Computational Biology","Systems Biology",
+  "Structural Biology","Immunology","Immunogenomics",
+  "Neuroscience","Neurogenomics","Rare Diseases","Inherited Disorders",
+  "Infectious Disease Genomics","Microbiome Research",
+  "Plant Genomics","Drug Discovery","Precision Medicine",
+  "Clinical Genomics","Translational Research",
+  "Machine Learning in Biology","AI in Healthcare","Other",
+];
+const EXPERIENCE_OPTIONS = [
+  "Less than 1 year","1–2 years","2–3 years","3–5 years",
+  "5–7 years","7–10 years","10–15 years","15+ years",
+];
+
+// ─── Inline autocomplete component ───────────────────────────────────────────
+function ACInput({
+  value, onChange, suggestions, placeholder, inputClass,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  suggestions: string[];
+  placeholder: string;
+  inputClass: string;
+}) {
+  const [open,  setOpen]  = useState(false);
+  const [query, setQuery] = useState(value);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setQuery(value); }, [value]);
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const filtered = query.trim().length === 0
+    ? suggestions.slice(0, 8)
+    : suggestions.filter(s => s.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+
+  const select = (s: string) => { setQuery(s); onChange(s); setOpen(false); };
+  const clear  = () => { setQuery(""); onChange(""); setOpen(true); };
+
+  const highlight = (text: string) => {
+    if (!query.trim()) return <span>{text}</span>;
+    const idx = text.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return <span>{text}</span>;
+    return <>
+      {text.slice(0, idx)}
+      <span className="text-primary font-semibold">{text.slice(idx, idx + query.length)}</span>
+      {text.slice(idx + query.length)}
+    </>;
+  };
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <div className="relative flex items-center">
+        <Search className="absolute left-3 h-3.5 w-3.5 text-muted-foreground/50 pointer-events-none" />
+        <input
+          type="text" value={query} placeholder={placeholder}
+          onFocus={() => setOpen(true)}
+          onChange={e => { setQuery(e.target.value); onChange(e.target.value); setOpen(true); }}
+          className={`${inputClass} pl-9 pr-8`}
+        />
+        {query && (
+          <button type="button" onMouseDown={e => { e.preventDefault(); clear(); }}
+            className="absolute right-2.5 text-muted-foreground/50 hover:text-muted-foreground">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      <AnimatePresence>
+        {open && filtered.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0,  scale: 1    }}
+            exit={{   opacity: 0, y: -4, scale: 0.98  }}
+            transition={{ duration: 0.1 }}
+            className="absolute z-50 w-full mt-1 rounded-lg border border-border bg-popover shadow-xl overflow-hidden"
+          >
+            <div className="max-h-52 overflow-y-auto">
+              {filtered.map((s, i) => (
+                <button key={s} type="button"
+                  onMouseDown={e => { e.preventDefault(); select(s); }}
+                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors
+                    hover:bg-accent hover:text-accent-foreground
+                    ${ value === s ? "bg-primary/10 text-primary" : "text-foreground" }
+                    ${ i < filtered.length - 1 ? "border-b border-border/40" : "" }`}
+                >
+                  {value === s && <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-primary" />}
+                  <span className={value === s ? "" : "pl-[18px]"}>{highlight(s)}</span>
+                </button>
+              ))}
+            </div>
+            {filtered.length === 8 && (
+              <div className="px-3 py-1.5 text-xs text-muted-foreground border-t border-border/40">
+                Keep typing to narrow results…
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 // ─── Password-change step machine ────────────────────────────────────────────
 type PwStep = "idle" | "form" | "otp" | "success";
@@ -60,14 +213,13 @@ const InfoRow = ({
 };
 
 export default function Profile() {
-  const { user, updateUser } = useAuth();
+  const { user, token = "", updateUser } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // ── researcher profile fetched from server ─────────────────────────────────
+  // ── researcher profile fetched from server ──────────────────────────────
   const [resProfile, setResProfile] = useState<ResearcherProfile | null>(null);
   const [profileCompleted, setProfileCompleted] = useState(false);
-  const token = localStorage.getItem("genovault-token") || "";
 
   useEffect(() => {
     if (!token) return;
@@ -88,7 +240,7 @@ export default function Profile() {
 
   // ── profile edit state ─────────────────────────────────────────────────────
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: user?.name ?? "", email: user?.email ?? "" });
+  const [form, setForm] = useState({ name: user?.name ?? "" });
   const [saved, setSaved] = useState(false);
 
   // ── password-change state ──────────────────────────────────────────────────
@@ -110,14 +262,13 @@ export default function Profile() {
   // ── profile save ───────────────────────────────────────────────────────────
   const handleSave = () => {
     if (!form.name.trim()) { toast({ title: "Name cannot be empty", variant: "destructive" }); return; }
-    if (!form.email.trim() || !form.email.includes("@")) { toast({ title: "Enter a valid email", variant: "destructive" }); return; }
-    updateUser({ name: form.name.trim(), email: form.email.trim() });
+    updateUser({ name: form.name.trim() });
     setEditing(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     toast({ title: "Profile updated successfully!" });
   };
-  const handleCancel = () => { setForm({ name: user.name, email: user.email }); setEditing(false); };
+  const handleCancel = () => { setForm({ name: user.name }); setEditing(false); };
 
   // ── countdown helpers ──────────────────────────────────────────────────────
   const startCountdown = (secs = 60) => {
@@ -244,16 +395,15 @@ export default function Profile() {
             )}
           </div>
 
-          {/* Email */}
+          {/* Email — always read-only */}
           <div className="space-y-1.5">
             <Label htmlFor="profile-email" className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wide">
               <Mail className="h-4 w-4 text-muted-foreground" /> Email Address
             </Label>
-            {editing ? (
-              <Input id="profile-email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="you@example.com" className="h-10" />
-            ) : (
-              <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">{user.email}</div>
-            )}
+            <div className="h-10 flex items-center justify-between px-3 rounded-md bg-muted/50 text-sm gap-2">
+              <span>{user.email}</span>
+              <span className="text-xs text-muted-foreground shrink-0">(Cannot be changed)</span>
+            </div>
           </div>
 
           {/* Role */}
@@ -276,86 +426,14 @@ export default function Profile() {
         )}
       </motion.div>
 
-      {/* ── Researcher Professional Details card (only for researcher role) ── */}
+      {/* ── Researcher Professional Details card ── */}
       {user.role === "researcher" && (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.1 }}
-          className="rounded-2xl border border-border bg-card p-6 mb-6 shadow-sm"
-        >
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide flex items-center gap-1.5">
-              <FlaskConical className="h-4 w-4" /> Researcher Professional Details
-            </h2>
-            {profileCompleted && (
-              <Badge className="text-xs bg-emerald-500/15 text-emerald-500 border-emerald-500/30">
-                <CheckCircle2 className="h-3 w-3 mr-1" /> Submitted
-              </Badge>
-            )}
-          </div>
-
-          {!profileCompleted || !resProfile ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center opacity-60">
-              <FlaskConical className="h-10 w-10 text-muted-foreground mb-3" />
-              <p className="text-sm font-medium">Professional details not yet submitted</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Complete your researcher profile to see your details here.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {/* Institution & Location */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <InfoRow icon={Building2}        label="Institution / University" value={resProfile.institution} />
-                <InfoRow icon={Globe}            label="Country"                  value={resProfile.country} />
-              </div>
-              <InfoRow   icon={BookOpen}         label="Department"               value={resProfile.department} />
-
-              {/* Role */}
-              <div className="pt-1 border-t border-border/50">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-                  <InfoRow icon={BriefcaseBusiness} label="Designation / Title"     value={resProfile.designation} />
-                  <InfoRow icon={Award}             label="Years of Experience"     value={resProfile.experience} />
-                </div>
-                <InfoRow   icon={FlaskConical}      label="Primary Research Area"   value={resProfile.researchArea} />
-              </div>
-
-              {/* Contact */}
-              {(resProfile.phone || resProfile.linkedIn || resProfile.orcid) && (
-                <div className="pt-1 border-t border-border/50 pt-4 space-y-4">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Contact &amp; Identity</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <InfoRow icon={Phone}    label="Phone Number"    value={resProfile.phone} />
-                    <InfoRow icon={Linkedin} label="LinkedIn"        value={resProfile.linkedIn} />
-                  </div>
-                  <InfoRow   icon={Hash}    label="ORCID ID"        value={resProfile.orcid} mono />
-                </div>
-              )}
-
-              {/* Purpose */}
-              {(resProfile.bio || resProfile.purpose) && (
-                <div className="pt-1 border-t border-border/50 pt-4 space-y-4">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Research Purpose</p>
-                  {resProfile.bio && (
-                    <div className="space-y-1.5">
-                      <Label className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wide">
-                        <FileText className="h-3.5 w-3.5" /> Short Bio
-                      </Label>
-                      <div className="px-3 py-2.5 rounded-md bg-muted/50 text-sm leading-relaxed">{resProfile.bio}</div>
-                    </div>
-                  )}
-                  {resProfile.purpose && (
-                    <div className="space-y-1.5">
-                      <Label className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wide">
-                        <FlaskConical className="h-3.5 w-3.5" /> Purpose of Access
-                      </Label>
-                      <div className="px-3 py-2.5 rounded-md bg-muted/50 text-sm leading-relaxed">{resProfile.purpose}</div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </motion.div>
+        <ResearcherDetailsCard
+          resProfile={resProfile}
+          profileCompleted={profileCompleted}
+          token={token}
+          onSaved={(updated) => { setResProfile(updated); setProfileCompleted(true); }}
+        />
       )}
 
       {/* ── Security / Password card ── */}
@@ -475,6 +553,282 @@ export default function Profile() {
   );
 }
 
+// ── Editable Researcher Details Card ─────────────────────────────────────────
+interface ResearcherProfile {
+  institution: string; department: string; designation: string;
+  researchArea: string; experience: string; country: string;
+  phone: string; linkedIn: string; orcid: string; bio: string; purpose: string;
+}
+
+const EMPTY_PROFILE: ResearcherProfile = {
+  institution: "", department: "", designation: "", researchArea: "",
+  experience: "", country: "", phone: "", linkedIn: "", orcid: "", bio: "", purpose: "",
+};
+
+function formatOrcid(raw: string) {
+  const digits = raw.replace(/[^0-9X]/gi, "").toUpperCase().slice(0, 16);
+  return digits.match(/.{1,4}/g)?.join("-") ?? digits;
+}
+
+function ResearcherDetailsCard({
+  resProfile, profileCompleted, token, onSaved,
+}: {
+  resProfile: ResearcherProfile | null;
+  profileCompleted: boolean;
+  token: string;
+  onSaved: (p: ResearcherProfile) => void;
+}) {
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<ResearcherProfile>(resProfile ?? EMPTY_PROFILE);
+
+  // sync if parent loads data after mount
+  useEffect(() => { if (resProfile) setForm(resProfile); }, [resProfile]);
+
+  const set = (k: keyof ResearcherProfile, v: string) => setForm(p => ({ ...p, [k]: v }));
+
+  const handleEdit = () => { setForm(resProfile ?? EMPTY_PROFILE); setEditing(true); };
+  const handleCancel = () => { setForm(resProfile ?? EMPTY_PROFILE); setEditing(false); };
+
+  const handleSave = async () => {
+    if (!form.institution.trim()) {
+      toast({ title: "Institution is required", variant: "destructive" }); return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("http://localhost:5000/api/auth/researcher-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Save failed");
+      onSaved(form);
+      setEditing(false);
+      toast({ title: "Professional details updated!" });
+    } catch (e: any) {
+      toast({ title: e.message || "Failed to save", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // shared input class
+  const inp = "h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+
+  // phone validation helper
+  const phoneDigits = form.phone.replace(/\D/g, "");
+  const phoneValid  = phoneDigits.length === 10;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: 0.1 }}
+      className="rounded-2xl border border-border bg-card p-6 mb-6 shadow-sm"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <FlaskConical className="h-4 w-4" /> Researcher Professional Details
+        </h2>
+        <div className="flex items-center gap-2">
+          {profileCompleted && !editing && (
+            <Badge className="text-xs bg-emerald-500/15 text-emerald-500 border-emerald-500/30">
+              <CheckCircle2 className="h-3 w-3 mr-1" /> Saved
+            </Badge>
+          )}
+          {!editing ? (
+            <Button variant="outline" size="sm" onClick={handleEdit}>
+              <Edit3 className="h-3.5 w-3.5 mr-1.5" /> Edit
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={handleCancel}>
+              <X className="h-3.5 w-3.5 mr-1" /> Cancel
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Empty state when never submitted and not editing */}
+      {!profileCompleted && !editing ? (
+        <div className="flex flex-col items-center justify-center py-8 text-center opacity-60">
+          <FlaskConical className="h-10 w-10 text-muted-foreground mb-3" />
+          <p className="text-sm font-medium">Professional details not yet submitted</p>
+          <p className="text-xs text-muted-foreground mt-1">Click Edit to fill in your details.</p>
+        </div>
+      ) : editing ? (
+        /* ── Edit Form ── */
+        <div className="space-y-5">
+          {/* Row 1 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Building2 className="h-3.5 w-3.5" /> Institution *
+              </Label>
+              <ACInput value={form.institution} onChange={v => set("institution", v)}
+                suggestions={INSTITUTIONS} placeholder="e.g. MIT" inputClass={inp} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Globe className="h-3.5 w-3.5" /> Country
+              </Label>
+              <ACInput value={form.country} onChange={v => set("country", v)}
+                suggestions={COUNTRIES} placeholder="e.g. India" inputClass={inp} />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <BookOpen className="h-3.5 w-3.5" /> Department
+            </Label>
+            <ACInput value={form.department} onChange={v => set("department", v)}
+              suggestions={DEPARTMENTS} placeholder="e.g. Bioinformatics" inputClass={inp} />
+          </div>
+
+          {/* Row 2 */}
+          <div className="border-t border-border/50 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <BriefcaseBusiness className="h-3.5 w-3.5" /> Designation / Title
+              </Label>
+              <ACInput value={form.designation} onChange={v => set("designation", v)}
+                suggestions={DESIGNATIONS} placeholder="e.g. PhD Researcher" inputClass={inp} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Award className="h-3.5 w-3.5" /> Years of Experience
+              </Label>
+              <ACInput value={form.experience} onChange={v => set("experience", v)}
+                suggestions={EXPERIENCE_OPTIONS} placeholder="e.g. 3–5 years" inputClass={inp} />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <FlaskConical className="h-3.5 w-3.5" /> Primary Research Area
+            </Label>
+            <ACInput value={form.researchArea} onChange={v => set("researchArea", v)}
+              suggestions={RESEARCH_AREAS} placeholder="e.g. Genomics, Oncology" inputClass={inp} />
+          </div>
+
+          {/* Contact */}
+          <div className="border-t border-border/50 pt-4 space-y-4">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Contact &amp; Identity</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Phone */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                  <Phone className="h-3.5 w-3.5" /> Phone Number
+                </Label>
+                <div className="relative">
+                  <input type="tel" className={inp} value={form.phone}
+                    style={{ paddingRight: form.phone ? "3.5rem" : undefined,
+                      borderColor: form.phone ? (phoneValid ? "#10b981" : phoneDigits.length > 10 ? "#ef4444" : "#f59e0b") : undefined }}
+                    onChange={e => set("phone", e.target.value)} placeholder="+91 9876543210" />
+                  {form.phone && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono font-semibold"
+                      style={{ color: phoneValid ? "#10b981" : phoneDigits.length > 10 ? "#ef4444" : "#f59e0b" }}>
+                      {phoneValid ? "✓" : `${phoneDigits.length}/10`}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                  <Linkedin className="h-3.5 w-3.5" /> LinkedIn URL
+                </Label>
+                <input className={inp} value={form.linkedIn}
+                  onChange={e => set("linkedIn", e.target.value)} placeholder="linkedin.com/in/..." />
+              </div>
+            </div>
+
+            {/* ORCID */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Hash className="h-3.5 w-3.5" /> ORCID ID
+              </Label>
+              <div className="relative">
+                <input className={`${inp} font-mono tracking-widest`} value={form.orcid}
+                  onChange={e => set("orcid", formatOrcid(e.target.value))}
+                  placeholder="0000-0000-0000-0000"
+                  style={{ borderColor: form.orcid.length === 19 ? "#10b981" : form.orcid.length > 0 ? "#f59e0b" : undefined }} />
+                {form.orcid && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono font-semibold"
+                    style={{ color: form.orcid.length === 19 ? "#10b981" : "#f59e0b" }}>
+                    {form.orcid.length === 19 ? "✓" : `${form.orcid.replace(/-/g,"").length}/16`}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Purpose */}
+          <div className="border-t border-border/50 pt-4 space-y-4">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Research Purpose</p>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5" /> Short Bio
+              </Label>
+              <textarea rows={2} className={`${inp} h-auto py-2 resize-none`} value={form.bio}
+                onChange={e => set("bio", e.target.value)} placeholder="Brief professional bio..." />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <FlaskConical className="h-3.5 w-3.5" /> Purpose of Access
+              </Label>
+              <textarea rows={3} className={`${inp} h-auto py-2 resize-none`} value={form.purpose}
+                onChange={e => set("purpose", e.target.value)} placeholder="Describe your research goals..." />
+            </div>
+          </div>
+
+          {/* Save row */}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" size="sm" onClick={handleCancel}>
+              <X className="h-3.5 w-3.5 mr-1" /> Cancel
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              {saving
+                ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</>
+                : <><Save className="h-3.5 w-3.5 mr-1" /> Save Changes</>}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        /* ── Read-only view ── */
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InfoRow icon={Building2}       label="Institution / University" value={resProfile?.institution} />
+            <InfoRow icon={Globe}           label="Country"                  value={resProfile?.country} />
+          </div>
+          <InfoRow   icon={BookOpen}        label="Department"               value={resProfile?.department} />
+          <div className="border-t border-border/50 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InfoRow icon={BriefcaseBusiness} label="Designation / Title"   value={resProfile?.designation} />
+            <InfoRow icon={Award}             label="Years of Experience"   value={resProfile?.experience} />
+          </div>
+          <InfoRow   icon={FlaskConical}    label="Primary Research Area"    value={resProfile?.researchArea} />
+          {(resProfile?.phone || resProfile?.linkedIn || resProfile?.orcid) && (
+            <div className="border-t border-border/50 pt-4 space-y-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Contact &amp; Identity</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <InfoRow icon={Phone}    label="Phone Number" value={resProfile?.phone} />
+                <InfoRow icon={Linkedin} label="LinkedIn"     value={resProfile?.linkedIn} />
+              </div>
+              <InfoRow icon={Hash} label="ORCID ID" value={resProfile?.orcid} mono />
+            </div>
+          )}
+          {(resProfile?.bio || resProfile?.purpose) && (
+            <div className="border-t border-border/50 pt-4 space-y-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Research Purpose</p>
+              <InfoRow icon={FileText}     label="Short Bio"         value={resProfile?.bio} />
+              <InfoRow icon={FlaskConical} label="Purpose of Access" value={resProfile?.purpose} />
+            </div>
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+}
 // ── Step indicator pills ──────────────────────────────────────────────────────
 function StepPills({ current }: { current: 1 | 2 }) {
   const steps = [{ n: 1, label: "New password" }, { n: 2, label: "Verify OTP" }];

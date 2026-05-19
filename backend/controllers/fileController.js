@@ -477,4 +477,32 @@ const previewFile = async (req, res) => {
   }
 };
 
-module.exports = { getUploadUrl, confirmUpload, getMyFiles, getIpfsStatus, previewFile, deleteFile, retryIpfs };
+/* ──────────────────────────────────────────────────────────────────────────
+   getPublicFiles  —  GET /api/files/public
+   ─────────────────────────────────────────
+   Returns a catalogue of all uploaded genomic files for researchers to browse.
+   Only safe, non-sensitive metadata is returned (no cloud URLs, no IVs).
+   Accessible by any authenticated researcher.
+   ────────────────────────────────────────────────────────────────────────── */
+const getPublicFiles = async (req, res) => {
+  try {
+    const files = await GenomicFile.find(
+      { uploadStatus: "confirmed" },
+      {
+        _id: 1, originalName: 1, extension: 1, sizeBytes: 1,
+        description: 1, isEncrypted: 1, ipfsStatus: 1,
+        ipfsCid: 1, createdAt: 1, owner: 1,
+      }
+    )
+      .populate("owner", "name email")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({ success: true, files });
+  } catch (err) {
+    console.error("[getPublicFiles]", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch datasets" });
+  }
+};
+
+module.exports = { getUploadUrl, confirmUpload, getMyFiles, getIpfsStatus, previewFile, deleteFile, retryIpfs, getPublicFiles };

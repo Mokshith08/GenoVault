@@ -6,6 +6,7 @@ const {
   getUploadUrl,
   confirmUpload,
   getMyFiles,
+  getPublicFiles,
   getIpfsStatus,
   previewFile,
   deleteFile,
@@ -25,6 +26,9 @@ const {
 
 // Generate a SAS token for direct-to-Azure upload
 router.get("/get-upload-url", protect, requireRole("owner"), getUploadUrl);
+
+// Public catalogue — available to any authenticated researcher
+router.get("/public", protect, requireRole("researcher"), getPublicFiles);
 
 // Confirm that the Azure upload finished; backend encrypts + IPFS backup in background
 router.post("/confirm-upload", protect, requireRole("owner"), confirmUpload);
