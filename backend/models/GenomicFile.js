@@ -103,6 +103,44 @@ const genomicFileSchema = new mongoose.Schema(
       trim: true,
       maxlength: [500, "Description cannot exceed 500 characters"],
     },
+
+    // ── Blockchain (Ethereum Sepolia) registration ─────────────────
+    // Set by the background job after AES encryption completes.
+    // null = not yet registered.
+
+    // On-chain file ID (uint256 returned by registerFile())
+    blockchainFileId: {
+      type: Number,
+      default: null,
+    },
+
+    // Transaction hash of the registerFile() call
+    blockchainTxHash: {
+      type: String,
+      default: null,
+    },
+
+    blockchainBlockNum: {
+      type: Number,
+      default: null,
+    },
+
+    // SHA-256 hex of the ENCRYPTED blob (stored on-chain)
+    blockchainFileHash: {
+      type: String,
+      default: null,
+    },
+
+    // IPFS CID stored on-chain (field 4 of the contract)
+    blockchainIpfsCID: {
+      type: String,
+      default: null,
+    },
+
+    blockchainTimestamp: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

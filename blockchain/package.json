@@ -1,0 +1,26 @@
+{
+  "name": "genovault-blockchain",
+  "version": "1.0.0",
+  "description": "GenoVault smart contracts — Hardhat Ethereum development environment",
+  "private": true,
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "node": "npx hardhat node",
+    "deploy": "npx hardhat run scripts/deploy.js --network localhost",
+    "deploy:local": "npx hardhat run scripts/deploy.js --network localhost",
+    "test": "npx hardhat test",
+    "test:coverage": "npx hardhat coverage",
+    "explorer": "node scripts/blockExplorer.js",
+    "interact": "node scripts/interact.js",
+    "clean": "npx hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0",
+    "hardhat-deploy": "^0.12.4"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "ethers": "^6.16.0"
+  }
+}

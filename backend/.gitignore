@@ -1,22 +1,36 @@
-# Node
+# ═══════════════════════════════════════════════════════
+#  backend/.gitignore
+# ═══════════════════════════════════════════════════════
+
+# ── Node.js ─────────────────────────────────────────────
 node_modules/
 dist/
 
-# Environment
+# ── Environment / Secrets (NEVER commit) ────────────────
 .env
 .env.local
 .env.production
+.env.staging
+.env.test
 
-# Logs
+# ── Logs ─────────────────────────────────────────────────
 *.log
 logs/
+npm-debug.log*
 
-# OS
+# ── Uploads (files go to Azure, not git) ────────────────
+uploads/
+
+# ── Build artifacts ──────────────────────────────────────
+*.js.map
+build/
+coverage/
+.nyc_output/
+
+# ── OS ───────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Uploads (store in cloud in production)
-uploads/
-
-# Build artifacts
-*.js.map
+# ── Temp / Cache ─────────────────────────────────────────
+tmp/
+.cache/

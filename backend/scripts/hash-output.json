@@ -1,0 +1,8 @@
+{
+  "algorithm": "SHA-256",
+  "fileName": "sample_encrypted_genome.vcf.enc",
+  "fileSizeBytes": 311,
+  "fileHash": "9b7c722488530c5e4fe8f3cc708833a69b28e9bd2ee47c865c66c6300c04f4a4",
+  "fileHashWith0x": "0x9b7c722488530c5e4fe8f3cc708833a69b28e9bd2ee47c865c66c6300c04f4a4",
+  "generatedAt": "2026-05-22T05:36:50.967Z"
+}

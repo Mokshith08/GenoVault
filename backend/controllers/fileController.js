@@ -23,7 +23,8 @@
  */
 
 const { v4: uuidv4 } = require("uuid");
-const path      = require("path");
+const path        = require("path");
+const crypto      = require("crypto");
 const GenomicFile = require("../models/GenomicFile");
 
 const {
@@ -34,9 +35,10 @@ const {
   uploadEncryptedBuffer,
 } = require("../services/azureService");
 
-const { uploadToIPFS, deleteFromIPFS } = require("../services/ipfsService");
+const { uploadToIPFS, deleteFromIPFS }   = require("../services/ipfsService");
 const { generateKey, generateIV, encryptBuffer, decryptPartialBuffer } = require("../services/encryptionService");
 const { storeEncryptionKey, deleteEncryptionKey } = require("../services/keyVaultService");
+const { registerFileOnChain }            = require("../services/blockchainService");
 
 // ── Allowed genomic file extensions ─────────────────────────────────────
 const ALLOWED_EXTENSIONS = new Set([".fastq", ".bam", ".vcf"]);
@@ -64,17 +66,20 @@ const generateSafeBlobName = (originalName) => {
      3. Overwrite blob with ciphertext
      4. Store AES key in Azure Key Vault
      5. Update MongoDB (isEncrypted = true, encryptionIv)
-     6. Start IPFS backup of encrypted blob
+     6. Compute SHA-256 of the encrypted blob → register on blockchain
+     7. Start IPFS backup of encrypted blob
 ────────────────────────────────────────────────────────────────────────────*/
 const runBackgroundEncryptAndBackup = async (fileId, blobName, originalName, mimeType, sizeBytes) => {
+  let encryptedBuffer = null;
+
   // ── Phase 1: AES-256-CBC encryption ───────────────────────────────────
   try {
     console.log(`[Encrypt] ⏳ Downloading blob for encryption: ${blobName}`);
-    const plainBuffer     = await downloadBlobToBuffer(blobName);
+    const plainBuffer = await downloadBlobToBuffer(blobName);
 
-    const aesKeyHex       = generateKey();   // 64-char hex (32 bytes)
-    const ivHex           = generateIV();    // 32-char hex (16 bytes)
-    const encryptedBuffer = encryptBuffer(plainBuffer, aesKeyHex, ivHex);
+    const aesKeyHex   = generateKey();
+    const ivHex       = generateIV();
+    encryptedBuffer   = encryptBuffer(plainBuffer, aesKeyHex, ivHex);
 
     console.log(`[Encrypt] 🔐 Re-uploading encrypted blob (${encryptedBuffer.length} bytes)`);
     await uploadEncryptedBuffer(blobName, encryptedBuffer, mimeType);
@@ -88,21 +93,46 @@ const runBackgroundEncryptAndBackup = async (fileId, blobName, originalName, mim
     });
     console.log(`[Encrypt] ✅ Encryption complete: ${blobName}`);
   } catch (encErr) {
-    // Non-fatal — file is still accessible, just not encrypted yet.
-    // isEncrypted remains false in DB so it's visible in audits.
     console.error(`[Encrypt] ❌ Encryption failed for ${blobName}:`, encErr.message);
   }
 
-  // ── Phase 2: IPFS backup (always runs, even if encryption failed) ──────
-  // IPFS backs up whatever is in Azure (encrypted if phase 1 succeeded,
-  // plaintext otherwise as a fallback).
+  // ── Phase 2: Blockchain registration ──────────────────────────────────
+  // Compute SHA-256 of the encrypted blob and register on Sepolia blockchain.
+  let sha256hex = null;
+  try {
+    const dataToHash = encryptedBuffer || Buffer.from(blobName);
+    sha256hex        = crypto.createHash("sha256").update(dataToHash).digest("hex");
+
+    console.log(`[Blockchain] ⏳ Registering file on Sepolia: ${sha256hex.slice(0, 16)}…`);
+    const bcResult = await registerFileOnChain(sha256hex, "");
+
+    if (bcResult.disabled) {
+      console.warn(`[Blockchain] ⚠️  Skipped (not configured): ${blobName}`);
+    } else if (bcResult.success) {
+      await GenomicFile.findByIdAndUpdate(fileId, {
+        blockchainFileId:    bcResult.fileId,
+        blockchainTxHash:    bcResult.txHash,
+        blockchainBlockNum:  bcResult.blockNumber,
+        blockchainFileHash:  sha256hex,
+        blockchainTimestamp: new Date(),
+      });
+      console.log(`[Blockchain] ✅ fileId=${bcResult.fileId} | Tx: ${bcResult.txHash} | Block: ${bcResult.blockNumber}`);
+    } else {
+      console.warn(`[Blockchain] ⚠️  Registration failed: ${bcResult.error}`);
+    }
+  } catch (bcErr) {
+    console.error(`[Blockchain] ❌ Exception during registration:`, bcErr.message);
+  }
+
+  // ── Phase 3: IPFS backup ──────────────────────────────────────────────
   try {
     await GenomicFile.findByIdAndUpdate(fileId, { ipfsStatus: "uploading" });
     const { cid, ipfsUrl } = await uploadToIPFS(blobName, originalName, mimeType, sizeBytes);
     await GenomicFile.findByIdAndUpdate(fileId, {
-      ipfsCid:    cid,
+      ipfsCid:           cid,
       ipfsUrl,
-      ipfsStatus: "done",
+      ipfsStatus:        "done",
+      blockchainIpfsCID: cid,   // mirrors IPFS CID stored on blockchain
     });
     console.log(`[IPFS] ✅ Backed up ${blobName} → CID: ${cid}`);
   } catch (ipfsErr) {

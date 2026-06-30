@@ -1,19 +1,20 @@
 require("dotenv").config();
 
-const express    = require("express");
-const cors       = require("cors");
-const helmet     = require("helmet");
-const morgan     = require("morgan");
-const rateLimit  = require("express-rate-limit");
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
 
 const connectDB = require("./config/db");
 
 // ── Route imports ────────────────────────────────────────────
-const authRoutes   = require("./routes/authRoutes");
-const otpRoutes    = require("./routes/otpRoutes");
-const fileRoutes   = require("./routes/fileRoutes");
-const accessRoutes = require("./routes/accessRoutes");
+const authRoutes        = require("./routes/authRoutes");
+const otpRoutes         = require("./routes/otpRoutes");
+const fileRoutes        = require("./routes/fileRoutes");
+const accessRoutes      = require("./routes/accessRoutes");
+const blockchainRoutes  = require("./routes/blockchainRoutes");
 
 
 // ─────────────────────────────────────────────────────────────
@@ -24,8 +25,8 @@ connectDB();
 
 // Ensure Azure Blob container exists + CORS configured on startup (non-blocking)
 const { ensureContainerExists, configureCors } = require("./services/azureService");
-ensureContainerExists().catch(() => {});
-configureCors().catch(() => {}); // Critical for fast browser-direct uploads
+ensureContainerExists().catch(() => { });
+configureCors().catch(() => { }); // Critical for fast browser-direct uploads
 
 // ── 2. Security middleware ────────────────────────────────────
 app.use(helmet()); // Sets secure HTTP headers
@@ -87,15 +88,16 @@ if (process.env.NODE_ENV === "development") {
 
 // ── 6. Apply rate limiters ────────────────────────────────────
 app.use("/api/", apiLimiter);
-app.use("/api/auth/login",      authLimiter);
-app.use("/api/auth/register",   authLimiter);
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
 app.use("/api/auth/verify-mfa", mfaLimiter); // Strict – brute-force guard
 
 // ── 7. Routes ─────────────────────────────────────────────────
-app.use("/api/auth",   authRoutes);
-app.use("/api/otp",    otpRoutes);
-app.use("/api/files",  fileRoutes);
-app.use("/api/access", accessRoutes);
+app.use("/api/auth",       authRoutes);
+app.use("/api/otp",        otpRoutes);
+app.use("/api/files",      fileRoutes);
+app.use("/api/access",     accessRoutes);
+app.use("/api/blockchain", blockchainRoutes); // Ethereum integration
 
 // Health check (useful for deployment / monitoring)
 app.get("/api/health", (req, res) => {
