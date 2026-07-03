@@ -292,11 +292,16 @@ const IpfsBadge = ({
     failed:    { color: "bg-red-500/20 text-red-400 border-red-500/30",             label: "IPFS Failed"    },
   };
   const style = map[status] ?? map.pending;
+  // Treat both "failed" and "uploading" as retryable — uploading may be stuck from a server restart
+  const canRetry = (status === "failed" || status === "uploading") && !retrying;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {/* Status pill */}
-      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${style.color}`}>
+      <span
+        className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${style.color}`}
+        title={status === "uploading" ? "IPFS backup may be stuck — click Retry IPFS to restart it" : undefined}
+      >
         {(status === "uploading" || retrying) && <Loader2 className="h-3 w-3 animate-spin" />}
         {status === "done"                    && <CheckCircle2 className="h-3 w-3" />}
         {status === "failed"  && !retrying    && <XCircle className="h-3 w-3" />}
@@ -316,13 +321,14 @@ const IpfsBadge = ({
         </button>
       )}
 
-      {/* Retry button (failed only) */}
-      {status === "failed" && !retrying && (
+      {/* Retry button — shown for failed AND stuck uploading */}
+      {canRetry && (
         <button
           onClick={onRetry}
           className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border
             bg-indigo-500/10 text-indigo-400 border-indigo-500/30
             hover:bg-indigo-500/20 transition-colors"
+          title="Restart the IPFS backup"
         >
           <RefreshCw className="h-3 w-3" />
           Retry IPFS
