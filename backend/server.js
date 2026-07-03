@@ -21,7 +21,25 @@ const blockchainRoutes  = require("./routes/blockchainRoutes");
 const app = express();
 
 // ── 1. Connect to MongoDB + Azure bootstrap ──────────────────
-connectDB();
+connectDB().then(async () => {
+  // ── Startup recovery: reset files stuck in "uploading" ─────
+  // If the server crashed/restarted mid-IPFS-upload, status stays
+  // "uploading" forever. Reset to "failed" so users can retry.
+  try {
+    const GenomicFile = require("./models/GenomicFile");
+    const stuckCount  = await GenomicFile.countDocuments({ ipfsStatus: "uploading" });
+    if (stuckCount > 0) {
+      await GenomicFile.updateMany(
+        { ipfsStatus: "uploading" },
+        { $set: { ipfsStatus: "failed" } }
+      );
+      console.log(`[Startup] ⚠️  Reset ${stuckCount} stuck IPFS upload(s) to "failed" — use retry to re-run.`);
+    }
+  } catch (err) {
+    console.warn("[Startup] Could not run IPFS recovery:", err.message);
+  }
+});
+
 
 // Ensure Azure Blob container exists + CORS configured on startup (non-blocking)
 const { ensureContainerExists, configureCors } = require("./services/azureService");
