@@ -125,14 +125,19 @@ const runBackgroundEncryptAndBackup = async (fileId, blobName, originalName, mim
   }
 
   // ── Phase 3: IPFS backup ──────────────────────────────────────────────
+  // Pass encryptedBuffer directly — skips a full Azure re-download (~500 MB saved).
+  // Falls back to Azure download if encryptedBuffer is null (encryption failed).
   try {
     await GenomicFile.findByIdAndUpdate(fileId, { ipfsStatus: "uploading" });
-    const { cid, ipfsUrl } = await uploadToIPFS(blobName, originalName, mimeType, sizeBytes);
+    const { cid, ipfsUrl } = await uploadToIPFS(
+      blobName, originalName, mimeType, sizeBytes,
+      encryptedBuffer   // ← in-memory buffer from Phase 1; null = download from Azure
+    );
     await GenomicFile.findByIdAndUpdate(fileId, {
       ipfsCid:           cid,
       ipfsUrl,
       ipfsStatus:        "done",
-      blockchainIpfsCID: cid,   // mirrors IPFS CID stored on blockchain
+      blockchainIpfsCID: cid,
     });
     console.log(`[IPFS] ✅ Backed up ${blobName} → CID: ${cid}`);
   } catch (ipfsErr) {
