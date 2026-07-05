@@ -212,7 +212,11 @@ const getUploadUrl = async (req, res) => {
 ────────────────────────────────────────────────────────────────────────────*/
 const confirmUpload = async (req, res) => {
   try {
-    const { blobName, originalName, sizeBytes, mimeType, description } = req.body;
+    const {
+      blobName, originalName, sizeBytes, mimeType, description,
+      genomeBuild, sequencingType, riskCategory, qualityScore,
+      detectedVariants, predictedRisks, phenotype,
+    } = req.body;
     const userId = req.user.userId;
 
     if (!blobName || !originalName) {
@@ -246,6 +250,9 @@ const confirmUpload = async (req, res) => {
     const accountName   = process.env.AZURE_STORAGE_ACCOUNT_NAME;
     const cloudUrl      = `https://${accountName}.blob.core.windows.net/${containerName}/${blobName}`;
 
+    // Auto-generate dataset ID: GV-XXXX (unique 4-digit-ish number from timestamp)
+    const datasetId = `GV-${(Date.now() % 9000 + 1000).toString().padStart(4, "0")}`;
+
     // Save metadata immediately (isEncrypted starts false — background job sets it true)
     const genomicFile = await GenomicFile.create({
       owner:              userId,
@@ -257,9 +264,18 @@ const confirmUpload = async (req, res) => {
       azureBlobName:      blobName,
       azureContainerName: containerName,
       cloudUrl,
-      isEncrypted:        false,   // background job will set this to true
+      isEncrypted:        false,
       ipfsStatus:         "pending",
       description:        description || "",
+      datasetId,
+      availability:       "Available",
+      genomeBuild:        genomeBuild        || null,
+      sequencingType:     sequencingType     || null,
+      riskCategory:       riskCategory       || null,
+      qualityScore:       qualityScore       || null,
+      detectedVariants:   Array.isArray(detectedVariants)  ? detectedVariants  : [],
+      predictedRisks:     Array.isArray(predictedRisks)    ? predictedRisks    : [],
+      phenotype:          Array.isArray(phenotype)         ? phenotype         : [],
     });
 
     // ── Respond immediately — user sees "Upload complete!" right away ───
@@ -527,9 +543,14 @@ const getPublicFiles = async (req, res) => {
         _id: 1, originalName: 1, extension: 1, sizeBytes: 1,
         description: 1, isEncrypted: 1, ipfsStatus: 1,
         ipfsCid: 1, createdAt: 1, owner: 1,
+        // catalog fields
+        datasetId: 1, availability: 1,
+        genomeBuild: 1, sequencingType: 1, riskCategory: 1,
+        qualityScore: 1, detectedVariants: 1, predictedRisks: 1, phenotype: 1,
       }
     )
-      .populate("owner", "name email")
+      // Populate ONLY anonymized owner fields — NO name or email
+      .populate("owner", "age gender country")
       .sort({ createdAt: -1 })
       .lean();
 
