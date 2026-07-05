@@ -5,7 +5,7 @@ import {
   Calendar, HardDrive, CheckCircle2, Clock,
   AlertTriangle, SlidersHorizontal, X, Globe,
   Activity, Dna as DnaIcon, FlaskConical, Hash,
-  ChevronRight, ExternalLink, Info,
+  ChevronRight, Info,
 } from "lucide-react";
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -163,15 +163,9 @@ function HoverPanel({ ds }: { ds: Dataset }) {
           </div>
         )}
 
-        {/* ── IPFS + size ── */}
-        <div className="pt-2 border-t border-border/50 flex items-center justify-between gap-2">
+        {/* ── IPFS status only — no download link for researchers ── */}
+        <div className="pt-2 border-t border-border/50 flex items-center gap-2">
           <IpfsPill status={ds.ipfsStatus} />
-          {ds.ipfsCid && (
-            <a href={`https://ipfs.io/ipfs/${ds.ipfsCid}`} target="_blank" rel="noopener noreferrer"
-              className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors">
-              IPFS <ExternalLink className="h-3 w-3" />
-            </a>
-          )}
         </div>
 
         <p className="text-center text-[11px] text-muted-foreground/60 flex items-center justify-center gap-1">

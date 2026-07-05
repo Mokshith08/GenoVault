@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/dashboard/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { useChunkedUpload, UploadState } from "@/hooks/useChunkedUpload";
+import { useChunkedUpload, UploadState, GenomicMeta } from "@/hooks/useChunkedUpload";
 import { useAuth } from "@/contexts/AuthContext";
 
 // ── Custom Delete Confirmation Modal ─────────────────────────────────────
@@ -338,11 +338,64 @@ const IpfsBadge = ({
   );
 };
 
+// ── TagInput — press Enter to add a tag ──────────────────────────────────
+function TagInput({
+  label, placeholder, value, onChange, tagColor = "bg-primary/10 text-primary",
+}: {
+  label:       string;
+  placeholder?: string;
+  value:       string[];
+  onChange:    (v: string[]) => void;
+  tagColor?:   string;
+}) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const t = input.trim();
+    if (t && !value.includes(t)) onChange([...value, t]);
+    setInput("");
+  };
+  return (
+    <div>
+      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">{label}</label>
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1.5">
+          {value.map(t => (
+            <span key={t} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${tagColor}`}>
+              {t}
+              <button type="button" onClick={() => onChange(value.filter(v => v !== t))}
+                className="hover:opacity-60 ml-0.5">
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        type="text" value={input}
+        onChange={e => setInput(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+        placeholder={placeholder}
+        className="w-full text-xs rounded-lg border border-border bg-background px-2 py-1.5
+          focus:outline-none focus:ring-1 focus:ring-primary"
+      />
+    </div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────
 const Upload = () => {
   const [dragActive, setDragActive]       = useState(false);
   const [selectedFile, setSelectedFile]   = useState<File | null>(null);
   const [description, setDescription]     = useState("");
+  // ── Genomic metadata ────────────────────────────────────────
+  const [genomeBuild,      setGenomeBuild]      = useState("");
+  const [sequencingType,   setSequencingType]   = useState("");
+  const [riskCategory,     setRiskCategory]     = useState("");
+  const [qualityScore,     setQualityScore]     = useState("");
+  const [detectedVariants, setDetectedVariants] = useState<string[]>([]);
+  const [predictedRisks,   setPredictedRisks]   = useState<string[]>([]);
+  const [phenotype,        setPhenotype]        = useState<string[]>([]);
+  const [showMeta,         setShowMeta]         = useState(false);
   const [files, setFiles]                 = useState<StoredFile[]>([]);
   const [loadingFiles, setLoadingFiles]   = useState(true);
   const [deletingId, setDeletingId]       = useState<string | null>(null);
@@ -434,7 +487,16 @@ const Upload = () => {
   const startUpload = async () => {
     if (!selectedFile) return;
     if (!token) { toast.error("Not authenticated"); return; }
-    await upload(selectedFile, description, token);
+    const meta: GenomicMeta = {
+      genomeBuild:      genomeBuild      || undefined,
+      sequencingType:   sequencingType   || undefined,
+      riskCategory:     riskCategory     || undefined,
+      qualityScore:     qualityScore     || undefined,
+      detectedVariants: detectedVariants.length ? detectedVariants : undefined,
+      predictedRisks:   predictedRisks.length   ? predictedRisks   : undefined,
+      phenotype:        phenotype.length         ? phenotype         : undefined,
+    };
+    await upload(selectedFile, description, token, meta);
   };
 
   /* ── Post-upload success ──────────────────────────────────── */
@@ -455,6 +517,10 @@ const Upload = () => {
       toast.success(`${selectedFile?.name} uploaded to Azure ✓ — IPFS backup started`);
       setSelectedFile(null);
       setDescription("");
+      // reset metadata
+      setGenomeBuild(""); setSequencingType(""); setRiskCategory("");
+      setQualityScore(""); setDetectedVariants([]); setPredictedRisks([]);
+      setPhenotype([]); setShowMeta(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.phase]);
@@ -635,14 +701,115 @@ const Upload = () => {
 
               {/* Description input */}
               {!isUploading && state.phase !== "done" && (
-                <input
-                  type="text"
-                  placeholder="Description (optional)"
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background mb-3 focus:outline-none focus:ring-1 focus:ring-primary"
-                  onClick={e => e.stopPropagation()}
-                />
+                <div className="space-y-3" onClick={e => e.stopPropagation()}>
+                  <input
+                    type="text"
+                    placeholder="Description (optional)"
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+
+                  {/* Genomic metadata toggle */}
+                  <button
+                    type="button"
+                    onClick={() => setShowMeta(p => !p)}
+                    className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground
+                      px-3 py-2 rounded-lg border border-dashed border-border hover:border-primary/40 transition-all"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Dna className="h-3.5 w-3.5" />
+                      Genomic Metadata <span className="text-muted-foreground/50">(optional — helps researchers find your data)</span>
+                    </span>
+                    <span className={`transition-transform ${showMeta ? "rotate-180" : ""}`}>▾</span>
+                  </button>
+
+                  {/* Metadata form */}
+                  {showMeta && (
+                    <div className="space-y-3 bg-muted/30 rounded-xl p-3 border border-border text-left">
+
+                      {/* Row: Genome Build + Sequencing Type */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Genome Build</label>
+                          <select value={genomeBuild} onChange={e => setGenomeBuild(e.target.value)}
+                            className="w-full text-xs rounded-lg border border-border bg-background px-2 py-1.5
+                              focus:outline-none focus:ring-1 focus:ring-primary">
+                            <option value="">Select…</option>
+                            {["GRCh38","GRCh37","hg19","hg18","T2T-CHM13","Other"].map(v =>
+                              <option key={v} value={v}>{v}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Quality Score</label>
+                          <div className="flex gap-1">
+                            {["High","Medium","Low"].map(q => (
+                              <button key={q} type="button" onClick={() => setQualityScore(qualityScore === q ? "" : q)}
+                                className={`flex-1 text-xs rounded-lg border py-1.5 font-medium transition-all
+                                  ${qualityScore === q
+                                    ? q === "High"   ? "border-emerald-500 bg-emerald-500/10 text-emerald-400"
+                                    : q === "Medium" ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                                    :                  "border-red-500 bg-red-500/10 text-red-400"
+                                    : "border-border text-muted-foreground hover:border-primary/40"}`}>
+                                {q}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sequencing Type */}
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Sequencing Type</label>
+                        <select value={sequencingType} onChange={e => setSequencingType(e.target.value)}
+                          className="w-full text-xs rounded-lg border border-border bg-background px-2 py-1.5
+                            focus:outline-none focus:ring-1 focus:ring-primary">
+                          <option value="">Select…</option>
+                          {["Whole Genome (WGS)","Whole Exome (WES)","RNA-seq",
+                            "Amplicon","Single-cell RNA-seq","ChIP-seq","ATAC-seq","Other"].map(v =>
+                            <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Risk Category */}
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Risk Category</label>
+                        <input
+                          type="text" placeholder="e.g. Hereditary Breast Cancer"
+                          value={riskCategory} onChange={e => setRiskCategory(e.target.value)}
+                          className="w-full text-xs rounded-lg border border-border bg-background px-2 py-1.5
+                            focus:outline-none focus:ring-1 focus:ring-primary" />
+                      </div>
+
+                      {/* Detected Variants */}
+                      <TagInput
+                        label="Detected Variants"
+                        placeholder="e.g. BRCA1 — press Enter"
+                        value={detectedVariants}
+                        onChange={setDetectedVariants}
+                        tagColor="bg-rose-500/10 text-rose-400"
+                      />
+
+                      {/* Predicted Risks */}
+                      <TagInput
+                        label="Predicted Genetic Risks"
+                        placeholder="e.g. Hereditary Breast & Ovarian Cancer — press Enter"
+                        value={predictedRisks}
+                        onChange={setPredictedRisks}
+                        tagColor="bg-amber-500/10 text-amber-400"
+                      />
+
+                      {/* Phenotype */}
+                      <TagInput
+                        label="Phenotype (User Confirmed)"
+                        placeholder="e.g. Family History of Breast Cancer — press Enter"
+                        value={phenotype}
+                        onChange={setPhenotype}
+                        tagColor="bg-violet-500/10 text-violet-400"
+                      />
+                    </div>
+                  )}
+                </div>
               )}
 
               {state.phase === "idle" && (
