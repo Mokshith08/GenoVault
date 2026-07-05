@@ -6,6 +6,7 @@ import {
   Camera, ShieldCheck, Loader2, RefreshCw, Search,
   Building2, Globe, FlaskConical, BriefcaseBusiness,
   Phone, Linkedin, BookOpen, Hash, FileText, Award,
+  CalendarDays, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,8 @@ const DESIGNATIONS = [
   "Director of Research","Chief Scientific Officer",
   "Medical Officer","Clinician-Scientist","Lab Manager","Other",
 ];
+
+const GENDERS = ["Male", "Female", "Non-binary", "Prefer not to say"];
 const RESEARCH_AREAS = [
   "Genomics","Proteomics","Transcriptomics","Metabolomics",
   "Metagenomics","Single-cell Genomics","Epigenomics",
@@ -230,18 +233,31 @@ export default function Profile() {
       .then(data => {
         if (data.success) {
           setProfileCompleted(!!data.user?.profileCompleted);
-          if (data.user?.researcherProfile) {
-            setResProfile(data.user.researcherProfile);
+          if (data.user?.researcherProfile) setResProfile(data.user.researcherProfile);
+          // Sync owner demographic fields into form
+          if (data.user?.role === "owner") {
+            setForm(f => ({
+              ...f,
+              age:     data.user.age     ? String(data.user.age) : f.age,
+              gender:  data.user.gender  ?? f.gender,
+              country: data.user.country ?? f.country,
+            }));
           }
         }
       })
       .catch(() => {});
   }, [token]);
 
-  // ── profile edit state ─────────────────────────────────────────────────────
+  // ── profile edit state ─────────────────────────────────────────────
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: user?.name ?? "" });
-  const [saved, setSaved] = useState(false);
+  const [form, setForm] = useState({
+    name:    user?.name    ?? "",
+    age:     user?.age     ? String(user.age) : "",
+    gender:  user?.gender  ?? "",
+    country: user?.country ?? "",
+  });
+  const [saved,   setSaved]   = useState(false);
+  const [saving,  setSaving]  = useState(false);
 
   // ── password-change state ──────────────────────────────────────────────────
   const [pwStep, setPwStep] = useState<PwStep>("idle");
@@ -259,16 +275,53 @@ export default function Profile() {
   const initials = (editing ? form.name : user.name)
     .split(" ").map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "ME";
 
-  // ── profile save ───────────────────────────────────────────────────────────
-  const handleSave = () => {
+  // -- profile save -------------------------------------------------------
+  const handleSave = async () => {
     if (!form.name.trim()) { toast({ title: "Name cannot be empty", variant: "destructive" }); return; }
-    updateUser({ name: form.name.trim() });
-    setEditing(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-    toast({ title: "Profile updated successfully!" });
+    setSaving(true);
+    try {
+      updateUser({ name: form.name.trim() });
+
+      if (user.role === "owner") {
+        const ageNum = form.age ? Number(form.age) : undefined;
+        const body: Record<string, unknown> = {};
+        if (ageNum && !isNaN(ageNum)) body.age = ageNum;
+        if (form.gender)  body.gender  = form.gender;
+        if (form.country) body.country = form.country;
+
+        if (Object.keys(body).length > 0) {
+          const res  = await fetch("http://localhost:5000/api/auth/profile", {
+            method:  "PATCH",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            updateUser({ profileCompleted: true, age: ageNum, gender: form.gender || undefined, country: form.country || undefined });
+          } else {
+            toast({ title: data.message || "Failed to save info", variant: "destructive" });
+          }
+        }
+      }
+
+      setEditing(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+      toast({ title: "Profile updated successfully!" });
+    } finally {
+      setSaving(false);
+    }
   };
-  const handleCancel = () => { setForm({ name: user.name }); setEditing(false); };
+  const handleCancel = () => {
+    setForm({
+      name:    user.name,
+      age:     user.age     ? String(user.age) : "",
+      gender:  user.gender  ?? "",
+      country: user.country ?? "",
+    });
+    setEditing(false);
+  };
+
 
   // ── countdown helpers ──────────────────────────────────────────────────────
   const startCountdown = (secs = 60) => {
@@ -416,12 +469,92 @@ export default function Profile() {
               <span className="text-xs text-muted-foreground">(cannot be changed)</span>
             </div>
           </div>
+
+          {/* ── Owner-only: Age / Gender / Country ── */}
+          {user.role === "owner" && (
+            <>
+              <div className="border-t border-border/50 pt-4">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Shield className="h-3.5 w-3.5" /> Anonymized Donor Info
+                  <span className="text-muted-foreground/50 font-normal normal-case tracking-normal">(used in dataset catalog — name never shown)</span>
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Age */}
+                  <div className="space-y-1.5">
+                    <Label className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wide">
+                      <CalendarDays className="h-3.5 w-3.5" /> Age
+                    </Label>
+                    {editing ? (
+                      <input
+                        type="number" min={1} max={120}
+                        value={form.age}
+                        onChange={e => setForm(f => ({ ...f, age: e.target.value }))}
+                        placeholder="e.g. 32"
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm
+                          focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    ) : (
+                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">
+                        {user.age ? `${user.age} years` : <span className="text-muted-foreground/50">Not set</span>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Gender */}
+                  <div className="space-y-1.5">
+                    <Label className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wide">
+                      <User className="h-3.5 w-3.5" /> Gender
+                    </Label>
+                    {editing ? (
+                      <select
+                        value={form.gender}
+                        onChange={e => setForm(f => ({ ...f, gender: e.target.value }))}
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm
+                          focus:outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        <option value="">Select…</option>
+                        {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    ) : (
+                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">
+                        {user.gender || <span className="text-muted-foreground/50">Not set</span>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Country */}
+                  <div className="space-y-1.5">
+                    <Label className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wide">
+                      <Globe className="h-3.5 w-3.5" /> Country
+                    </Label>
+                    {editing ? (
+                      <select
+                        value={form.country}
+                        onChange={e => setForm(f => ({ ...f, country: e.target.value }))}
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm
+                          focus:outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        <option value="">Select…</option>
+                        {COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    ) : (
+                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">
+                        {user.country || <span className="text-muted-foreground/50">Not set</span>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {editing && (
           <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex gap-2 mt-5 justify-end">
-            <Button variant="ghost" size="sm" onClick={handleCancel}><X className="h-3.5 w-3.5 mr-1" /> Cancel</Button>
-            <Button size="sm" onClick={handleSave}><Save className="h-3.5 w-3.5 mr-1" /> Save Changes</Button>
+            <Button variant="ghost" size="sm" onClick={handleCancel} disabled={saving}><X className="h-3.5 w-3.5 mr-1" /> Cancel</Button>
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</> : <><Save className="h-3.5 w-3.5 mr-1" /> Save Changes</>}
+            </Button>
           </motion.div>
         )}
       </motion.div>
