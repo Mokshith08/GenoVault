@@ -1,16 +1,25 @@
 import { createContext, useContext, useState, ReactNode, useEffect } from "react";
 
 export type Role = "owner" | "researcher";
-export interface MockUser { name: string; email: string; role: Role; }
+
+export interface MockUser {
+  name:             string;
+  email:            string;
+  role:             Role;
+  profileCompleted: boolean;
+  age?:             number | null;
+  gender?:          string | null;
+  country?:         string | null;
+}
 
 interface AuthCtx {
-  user: MockUser | null;
-  token: string | null;
-  pin: string | null;
-  login: (u: MockUser, token: string) => void;
-  logout: () => void;
-  updateUser: (partial: Partial<Pick<MockUser, "name" | "email">>) => void;
-  setPin: (pin: string) => void;
+  user:        MockUser | null;
+  token:       string | null;
+  pin:         string | null;
+  login:       (u: MockUser, token: string) => void;
+  logout:      () => void;
+  updateUser:  (partial: Partial<MockUser>) => void;
+  setPin:      (pin: string) => void;
 }
 
 const AuthContext = createContext<AuthCtx | undefined>(undefined);
@@ -21,9 +30,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return raw ? JSON.parse(raw) : null;
   });
 
-  // Token lives in React state (memory). localStorage is only used as a
-  // persistence fallback so a page refresh doesn't force re-login.
-  // It is NOT read directly by components — they use useAuth().token instead.
   const [token, setToken] = useState<string | null>(() => {
     return localStorage.getItem("genovault-token");
   });
@@ -51,10 +57,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
     setToken(null);
     localStorage.removeItem("genovault-token");
-    // PIN intentionally kept across sessions
   };
 
-  const updateUser = (partial: Partial<Pick<MockUser, "name" | "email">>) => {
+  const updateUser = (partial: Partial<MockUser>) => {
     setUser(prev => prev ? { ...prev, ...partial } : prev);
   };
 
