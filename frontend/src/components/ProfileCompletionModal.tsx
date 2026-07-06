@@ -135,11 +135,14 @@ function CountryPicker({
 interface Props { open: boolean; }
 
 export default function ProfileCompletionModal({ open }: Props) {
-  const { token, updateUser } = useAuth();
+  const { token, user, updateUser } = useAuth();
   const [age,     setAge]     = useState("");
   const [gender,  setGender]  = useState("");
   const [country, setCountry] = useState("");
   const [saving,  setSaving]  = useState(false);
+
+  // ── Only owners fill this; call all hooks first to satisfy Rules of Hooks ──
+  const isOwner = user?.role === "owner";
 
   const canSave = age.trim() !== "" && gender !== "" && country !== "" && !saving;
 
@@ -151,6 +154,11 @@ export default function ProfileCompletionModal({ open }: Props) {
       return;
     }
     setSaving(true);
+
+    // ── Optimistically mark as completed so modal never re-appears ──
+    // Do this BEFORE the API call so a refresh/nav away doesn't re-trigger the modal.
+    updateUser({ profileCompleted: true, age: ageNum, gender, country });
+
     try {
       const res  = await fetch("http://localhost:5000/api/auth/profile", {
         method:  "PATCH",
@@ -158,11 +166,15 @@ export default function ProfileCompletionModal({ open }: Props) {
         body:    JSON.stringify({ age: ageNum, gender, country }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to save");
-      updateUser({ profileCompleted: true, age: ageNum, gender, country });
+      if (!res.ok) {
+        // API failed — still keep modal closed (already marked in AuthContext)
+        // but warn the user so they can retry from the Profile page.
+        toast.warning("Profile saved locally but server sync failed. Edit from your Profile page.");
+        return;
+      }
       toast.success("Profile saved! Welcome to GenoVault.");
-    } catch (e: any) {
-      toast.error(e.message || "Could not save profile");
+    } catch {
+      toast.warning("Profile saved locally but server sync failed. Edit from your Profile page.");
     } finally {
       setSaving(false);
     }
@@ -170,7 +182,7 @@ export default function ProfileCompletionModal({ open }: Props) {
 
   return (
     <AnimatePresence>
-      {open && (
+      {open && isOwner && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
