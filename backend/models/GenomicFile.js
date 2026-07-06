@@ -104,6 +104,64 @@ const genomicFileSchema = new mongoose.Schema(
       maxlength: [500, "Description cannot exceed 500 characters"],
     },
 
+    // ── Dataset catalog ID ─────────────────────────────
+    datasetId: {
+      type:    String,
+      unique:  true,
+      sparse:  true,         // sparse so existing docs with null don’t conflict
+      default: null,
+    },
+
+    // ── Availability ─────────────────────────────────
+    availability: {
+      type:    String,
+      enum:    ["Available", "Restricted"],
+      default: "Available",
+    },
+
+    // ── Genomic metadata (entered by owner at upload) ───────
+    genomeBuild: {
+      type: String,
+      enum: ["GRCh38", "GRCh37", "hg19", "hg18", "T2T-CHM13", "Other"],
+      default: null,
+    },
+
+    sequencingType: {
+      type: String,
+      enum: [
+        "Whole Genome (WGS)", "Whole Exome (WES)", "RNA-seq",
+        "Amplicon", "Single-cell RNA-seq", "ChIP-seq", "ATAC-seq", "Other",
+      ],
+      default: null,
+    },
+
+    riskCategory: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    qualityScore: {
+      type:    String,
+      enum:    ["High", "Medium", "Low"],
+      default: null,
+    },
+
+    detectedVariants: {
+      type:    [String],
+      default: [],
+    },
+
+    predictedRisks: {
+      type:    [String],
+      default: [],
+    },
+
+    phenotype: {
+      type:    [String],
+      default: [],
+    },
+
     // ── Blockchain (Ethereum Sepolia) registration ─────────────────
     // Set by the background job after AES encryption completes.
     // null = not yet registered.
