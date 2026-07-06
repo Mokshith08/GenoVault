@@ -140,11 +140,15 @@ const Login = () => {
       if (!res.ok) throw new Error(data.message || "Login failed");
 
       setVerifiedUser({
-        name: data.user.name,
-        email: data.user.email,
-        role: data.user.role,
-        token: data.token,
-        mfa_enabled: !!data.user.mfa_enabled,
+        name:             data.user.name,
+        email:            data.user.email,
+        role:             data.user.role,
+        token:            data.token,
+        mfa_enabled:      !!data.user.mfa_enabled,
+        profileCompleted: data.user.profileCompleted ?? false,
+        age:              data.user.age    ?? null,
+        gender:           data.user.gender ?? null,
+        country:          data.user.country ?? null,
       });
 
       // 1b — Always send email OTP (regardless of MFA status)
@@ -201,7 +205,15 @@ const Login = () => {
       // Token stored in React state (AuthContext) only — NOT localStorage.
       // The httpOnly cookie set by the backend handles persistence automatically.
       login(
-        { name: verifiedUser.name, email: verifiedUser.email, role: verifiedUser.role },
+        {
+          name:             verifiedUser.name,
+          email:            verifiedUser.email,
+          role:             verifiedUser.role,
+          profileCompleted: verifiedUser.profileCompleted ?? false,
+          age:              verifiedUser.age    ?? null,
+          gender:           verifiedUser.gender ?? null,
+          country:          verifiedUser.country ?? null,
+        },
         verifiedUser.token,
       );
       toast.success("Welcome back!");
