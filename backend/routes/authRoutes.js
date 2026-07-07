@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { register, login, getMe, forgotPassword, resetPassword, setPin, changePin, updateResearcherProfile } = require("../controllers/authController");
+const { register, login, getMe, forgotPassword, resetPassword, setPin, changePin, updateResearcherProfile, updateProfile } = require("../controllers/authController");
 const { setupMFA, verifyMFA } = require("../controllers/mfaController");
 const { protect } = require("../middleware/authMiddleware");
 
@@ -27,6 +27,7 @@ router.get("/me",         protect, getMe);
 router.post("/set-pin",   protect, setPin);    // First-time PIN setup
 router.post("/change-pin", protect, changePin); // Update existing PIN
 router.put("/researcher-profile", protect, updateResearcherProfile); // Researcher first-login profile
+router.patch("/profile",           protect, updateProfile);           // Age / gender / country (all users)
 
 // ── MFA (TOTP) ───────────────────────────────────────────────
 // Both endpoints require a valid JWT; MFA is tied to the current user
