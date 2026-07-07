@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
+import ProfileCompletionModal from "@/components/ProfileCompletionModal";
 
 export const DashboardLayout = () => {
   const { user, logout } = useAuth();
@@ -30,6 +31,8 @@ export const DashboardLayout = () => {
     <SidebarProvider>
       {/* PIN setup modal – shown to new users who have no PIN yet */}
       <PinSetupModal />
+      {/* Profile completion – age / gender / country (first login, owner only) */}
+      <ProfileCompletionModal open={!user.profileCompleted} />
       <div className="min-h-screen flex w-full bg-muted/30">
         <AppSidebar />
 
