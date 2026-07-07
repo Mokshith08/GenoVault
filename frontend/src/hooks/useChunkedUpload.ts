@@ -48,6 +48,17 @@ export interface UploadState {
   fileId:       string;
 }
 
+// ── Genomic metadata passed at upload-time ────────────────────────────────
+export interface GenomicMeta {
+  genomeBuild?:      string;
+  sequencingType?:   string;
+  riskCategory?:     string;
+  qualityScore?:     string;
+  detectedVariants?: string[];
+  predictedRisks?:   string[];
+  phenotype?:        string[];
+}
+
 const INITIAL: UploadState = {
   phase: "idle", progress: 0, loadedBytes: 0, totalBytes: 0, speedMBps: 0,
   errorMsg: "", cloudUrl: "", ipfsCid: "", ipfsUrl: "", fileId: "",
@@ -67,7 +78,8 @@ export const useChunkedUpload = () => {
   const upload = useCallback(async (
     file:        File,
     description: string,
-    token:       string
+    token:       string,
+    meta?:       GenomicMeta,
   ) => {
     abortRef.current  = false;
     abortCtrl.current = new AbortController();
@@ -147,6 +159,14 @@ export const useChunkedUpload = () => {
           sizeBytes:    file.size,
           mimeType:     file.type || "application/octet-stream",
           description,
+          // genomic metadata — spread so undefined keys are omitted
+          ...(meta?.genomeBuild      && { genomeBuild:      meta.genomeBuild      }),
+          ...(meta?.sequencingType   && { sequencingType:   meta.sequencingType   }),
+          ...(meta?.riskCategory     && { riskCategory:     meta.riskCategory     }),
+          ...(meta?.qualityScore     && { qualityScore:     meta.qualityScore     }),
+          ...(meta?.detectedVariants?.length && { detectedVariants: meta.detectedVariants }),
+          ...(meta?.predictedRisks?.length   && { predictedRisks:   meta.predictedRisks   }),
+          ...(meta?.phenotype?.length        && { phenotype:         meta.phenotype        }),
         }),
         signal: abortCtrl.current.signal,
       });
