@@ -68,6 +68,11 @@ const userSchema = new mongoose.Schema(
       type: Date,
     },
 
+    // ── Anonymized donor/owner profile (shown in dataset catalog) ──
+    age:     { type: Number, min: 1, max: 120, default: null },
+    gender:  { type: String, enum: ["Male", "Female", "Non-binary", "Prefer not to say"], default: null },
+    country: { type: String, trim: true, default: null },
+
     // Researcher-only: professional profile (filled on first login popup)
     profileCompleted: {
       type: Boolean,

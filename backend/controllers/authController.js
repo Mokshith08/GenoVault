@@ -155,12 +155,16 @@ const login = async (req, res) => {
       message: "Login successful",
       token,   // frontend stores in React state (memory) only — not localStorage
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        pinSet: user.pinSet,
-        mfa_enabled: user.mfa_enabled, // ← frontend uses this to pick OTP vs TOTP flow
+        id:               user._id,
+        name:             user.name,
+        email:            user.email,
+        role:             user.role,
+        pinSet:           user.pinSet,
+        mfa_enabled:      user.mfa_enabled,
+        profileCompleted: user.profileCompleted ?? false,  // ← owner profile modal gate
+        age:              user.age    ?? null,
+        gender:           user.gender ?? null,
+        country:          user.country ?? null,
       },
     });
   } catch (err) {
@@ -465,4 +469,39 @@ const updateResearcherProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, forgotPassword, resetPassword, setPin, changePin, updateResearcherProfile };
+/* ─────────────────────────────────────────────────────────────
+   PATCH /api/auth/profile
+   Saves age, gender, country for ANY user (owner or researcher).
+   Called once on first login; marks profileCompleted = true.
+───────────────────────────────────────────────────────────── */
+const updateProfile = async (req, res) => {
+  try {
+    const { age, gender, country } = req.body;
+
+    if (!age || !gender || !country) {
+      return res.status(400).json({ success: false, message: "age, gender and country are required" });
+    }
+    if (isNaN(Number(age)) || Number(age) < 1 || Number(age) > 120) {
+      return res.status(400).json({ success: false, message: "Age must be between 1 and 120" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.userId,
+      { age: Number(age), gender, country: country.trim(), profileCompleted: true },
+      { new: true, runValidators: true }
+    );
+
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile saved",
+      profile: { age: user.age, gender: user.gender, country: user.country, profileCompleted: true },
+    });
+  } catch (err) {
+    console.error("[updateProfile]", err);
+    return res.status(500).json({ success: false, message: "Failed to save profile" });
+  }
+};
+
+module.exports = { register, login, getMe, forgotPassword, resetPassword, setPin, changePin, updateResearcherProfile, updateProfile };
