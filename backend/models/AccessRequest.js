@@ -47,7 +47,7 @@ const accessRequestSchema = new mongoose.Schema(
     // Workflow status
     status: {
       type: String,
-      enum: ["pending", "approved", "denied"],
+      enum: ["pending", "approved", "denied", "rejected", "revoked"],
       default: "pending",
       index: true,
     },
@@ -63,6 +63,35 @@ const accessRequestSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    // ── Blockchain receipt fields (populated after each tx) ────────────────
+    // Request transaction (AccessRequested event)
+    requestTxHash:         { type: String, default: null },
+    requestBlockNumber:    { type: Number, default: null },
+    requestGasUsed:        { type: String, default: null },
+    requestTxStatus:       { type: String, default: null },
+    requestEtherscanUrl:   { type: String, default: null },
+
+    // Approval transaction (AccessApproved event)
+    approveTxHash:         { type: String, default: null },
+    approveBlockNumber:    { type: Number, default: null },
+    approveGasUsed:        { type: String, default: null },
+    approveTxStatus:       { type: String, default: null },
+    approveEtherscanUrl:   { type: String, default: null },
+
+    // Rejection transaction (AccessRejected event)
+    rejectTxHash:          { type: String, default: null },
+    rejectBlockNumber:     { type: Number, default: null },
+    rejectGasUsed:         { type: String, default: null },
+    rejectTxStatus:        { type: String, default: null },
+    rejectEtherscanUrl:    { type: String, default: null },
+
+    // Revocation transaction (AccessRevoked event)
+    revokeTxHash:          { type: String, default: null },
+    revokeBlockNumber:     { type: Number, default: null },
+    revokeGasUsed:         { type: String, default: null },
+    revokeTxStatus:        { type: String, default: null },
+    revokeEtherscanUrl:    { type: String, default: null },
   },
   {
     timestamps: true,
