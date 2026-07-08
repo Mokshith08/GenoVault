@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Check, X, Database, FlaskConical, ShieldCheck, KeyRound,
   AlertTriangle, Loader2, RefreshCw, Dna, HardDrive, Calendar,
-  User, Shield, CheckCircle2, Clock, Search,
+  User, Shield, CheckCircle2, Clock, Search, ExternalLink,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/dashboard/PageHeader";
@@ -13,10 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PinInput } from "@/components/ui/PinInput";
 import { useAuth } from "@/contexts/AuthContext";
-import { mockRequests, AccessRequest } from "@/lib/mockData";
 
-// ── Real dataset type from API ────────────────────────────────────────────────
-interface RealDataset {
+// ── Dataset type from public API ─────────────────────────────────────────────
+interface Dataset {
   _id: string;
   originalName: string;
   extension: ".fastq" | ".bam" | ".vcf";
@@ -28,7 +28,25 @@ interface RealDataset {
   createdAt: string;
   owner: { name: string; email: string };
   blockchainFileId?: number;
-  blockchainFileHash?: string;
+}
+
+// ── Incoming request type from /api/access/incoming-requests ─────────────────
+interface IncomingRequest {
+  _id: string;
+  file: { _id: string; originalName: string; extension: string; blockchainFileId?: number };
+  researcher: { _id: string; name: string; email: string; orcid?: string };
+  reason?: string;
+  status: "pending" | "approved" | "denied" | "rejected" | "revoked";
+  createdAt: string;
+  approvedAt?: string;
+  accessExpiresAt?: string;
+  // Blockchain receipt fields
+  approveTxHash?: string;
+  rejectTxHash?: string;
+  revokeTxHash?: string;
+  approveEtherscanUrl?: string;
+  rejectEtherscanUrl?: string;
+  revokeEtherscanUrl?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -51,7 +69,15 @@ const EXT_COLORS: Record<string, { bg: string; text: string; badge: string }> = 
   ".vcf":   { bg: "bg-emerald-500/15",text: "text-emerald-400", badge: "VCF"   },
 };
 
-function IpfsPill({ status }: { status: RealDataset["ipfsStatus"] }) {
+const STATUS_COLORS: Record<string, string> = {
+  pending:  "bg-amber-500/20 text-amber-400",
+  approved: "bg-emerald-500/20 text-emerald-400",
+  denied:   "bg-red-500/20 text-red-400",
+  rejected: "bg-red-500/20 text-red-400",
+  revoked:  "bg-zinc-500/20 text-zinc-400",
+};
+
+function IpfsPill({ status }: { status: Dataset["ipfsStatus"] }) {
   const map = {
     done:      { icon: <CheckCircle2 className="h-3 w-3" />, label: "IPFS Backed Up", cls: "bg-emerald-500/15 text-emerald-400" },
     uploading: { icon: <Clock className="h-3 w-3 animate-spin" />, label: "Backing Up…",  cls: "bg-amber-500/15 text-amber-400"   },
@@ -108,9 +134,7 @@ const PinStep = ({ action, researcher, onSuccess, onCancel, isLoading }: PinStep
           </p>
         </div>
       </div>
-
       <PinInput value={digits} onChange={setDigits} shake={shake} autoFocus />
-
       <div className="flex gap-2 pt-1">
         <Button variant="outline" className="flex-1" onClick={onCancel} disabled={isLoading}>Cancel</Button>
         <Button
@@ -126,12 +150,9 @@ const PinStep = ({ action, researcher, onSuccess, onCancel, isLoading }: PinStep
 };
 
 /* ─────────────── Inline Modal ─────────────── */
-interface ModalProps { children: React.ReactNode; onClose: () => void; }
-const Modal = ({ children, onClose }: ModalProps) => (
+const Modal = ({ children, onClose }: { children: React.ReactNode; onClose: () => void }) => (
   <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
+    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
     className="fixed inset-0 z-50 flex items-center justify-center p-4"
     style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
     onClick={e => { if (e.target === e.currentTarget) onClose(); }}
@@ -148,34 +169,39 @@ const Modal = ({ children, onClose }: ModalProps) => (
   </motion.div>
 );
 
-/* ─────────────── Main Page ─────────────── */
 type Step = "idle" | "confirm" | "pin";
 
+/* ════════════════════════════════════════════════════════════════
+   MAIN PAGE
+════════════════════════════════════════════════════════════════ */
 const Requests = () => {
   const { user, token } = useAuth();
   const isOwner = user?.role === "owner";
 
-  // ── Owner state ────────────────────────────────────────────────────────────
-  const [requests, setRequests] = useState<AccessRequest[]>(mockRequests);
-  const [step, setStep] = useState<Step>("idle");
-  const [pending, setPending] = useState<{ req: AccessRequest; action: "approve" | "reject" } | null>(null);
-  const [verifying, setVerifying] = useState(false);
-
   // ── Researcher state ───────────────────────────────────────────────────────
-  const [datasets,   setDatasets]   = useState<RealDataset[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error,      setError]      = useState<string | null>(null);
+  const [datasets,   setDatasets]   = useState<Dataset[]>([]);
+  const [dsLoading,  setDsLoading]  = useState(true);
+  const [dsError,    setDsError]    = useState<string | null>(null);
   const [search,     setSearch]     = useState("");
   const [requested,  setRequested]  = useState<Set<string>>(new Set());
   const [requesting, setRequesting] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // ── Fetch real datasets ────────────────────────────────────────────────────
+  // ── Owner state ────────────────────────────────────────────────────────────
+  const [incoming,    setIncoming]    = useState<IncomingRequest[]>([]);
+  const [inLoading,   setInLoading]   = useState(true);
+  const [inError,     setInError]     = useState<string | null>(null);
+  const [inRefreshing,setInRefreshing]= useState(false);
+  const [searchIn,    setSearchIn]    = useState("");
+  const [step,        setStep]        = useState<Step>("idle");
+  const [pending,     setPending]     = useState<{ req: IncomingRequest; action: "approve" | "reject" } | null>(null);
+  const [submitting,  setSubmitting]  = useState(false);
+
+  /* ── Researcher: load datasets ──────────────────────────────────────────── */
   const fetchDatasets = useCallback(async (silent = false) => {
     if (!token || isOwner) return;
-    if (!silent) setLoading(true);
-    else         setRefreshing(true);
-    setError(null);
+    if (!silent) setDsLoading(true); else setRefreshing(true);
+    setDsError(null);
     try {
       const res  = await fetch("http://localhost:5000/api/files/public", {
         headers: { Authorization: `Bearer ${token}` },
@@ -184,35 +210,59 @@ const Requests = () => {
       if (!res.ok) throw new Error(data.message || "Failed to load datasets");
       setDatasets(data.files ?? []);
     } catch (e: any) {
-      setError(e.message || "Network error — is the backend running?");
+      setDsError(e.message || "Network error");
     } finally {
-      setLoading(false);
+      setDsLoading(false);
       setRefreshing(false);
     }
   }, [token, isOwner]);
 
   useEffect(() => { fetchDatasets(); }, [fetchDatasets]);
-
-  // Poll every 20 s for new uploads
   useEffect(() => {
     if (isOwner) return;
     const id = setInterval(() => fetchDatasets(true), 20_000);
     return () => clearInterval(id);
   }, [fetchDatasets, isOwner]);
 
-  // ── Request access (real API) ──────────────────────────────────────────────
-  const requestAccess = async (ds: RealDataset) => {
+  /* ── Owner: load incoming requests ─────────────────────────────────────── */
+  const fetchIncoming = useCallback(async (silent = false) => {
+    if (!token || !isOwner) return;
+    if (!silent) setInLoading(true); else setInRefreshing(true);
+    setInError(null);
+    try {
+      const res  = await fetch("http://localhost:5000/api/access/incoming-requests", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to load requests");
+      setIncoming(data.requests ?? []);
+    } catch (e: any) {
+      setInError(e.message || "Network error");
+    } finally {
+      setInLoading(false);
+      setInRefreshing(false);
+    }
+  }, [token, isOwner]);
+
+  useEffect(() => { fetchIncoming(); }, [fetchIncoming]);
+  useEffect(() => {
+    if (!isOwner) return;
+    const id = setInterval(() => fetchIncoming(true), 15_000);
+    return () => clearInterval(id);
+  }, [fetchIncoming, isOwner]);
+
+  /* ── Researcher: request access ─────────────────────────────────────────── */
+  const requestAccess = async (ds: Dataset) => {
     if (requested.has(ds._id) || requesting === ds._id) return;
     setRequesting(ds._id);
     try {
-      const res = await fetch("http://localhost:5000/api/access/request-access", {
+      const res  = await fetch("http://localhost:5000/api/access/request-access", {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ fileId: ds._id }),
       });
       const data = await res.json();
       if (!res.ok) {
-        // 409 = already requested — still mark as requested in UI
         if (res.status === 409) {
           setRequested(prev => new Set(prev).add(ds._id));
           toast.info(`Already requested access for ${ds.originalName}`);
@@ -229,35 +279,76 @@ const Requests = () => {
     }
   };
 
+  /* ── Owner: approve / reject helpers ─────────────────────────────────────── */
+  const openDialog  = (req: IncomingRequest, action: "approve" | "reject") => {
+    setPending({ req, action });
+    setStep("confirm");
+  };
+  const closeDialog = () => { setStep("idle"); setPending(null); setSubmitting(false); };
 
-  // ── Owner helpers ──────────────────────────────────────────────────────────
-  const openDialog  = (req: AccessRequest, action: "approve" | "reject") => { setPending({ req, action }); setStep("confirm"); };
-  const closeDialog = () => { setStep("idle"); setPending(null); setVerifying(false); };
-  const onConfirmYes = () => setStep("pin");
-  const onPinSuccess = () => {
+  const onPinSuccess = async () => {
     if (!pending) return;
-    setVerifying(true);
-    setTimeout(() => {
-      setRequests(rs => rs.map(r =>
-        r.id === pending.req.id
-          ? { ...r, status: pending.action === "approve" ? "Approved" : "Rejected" }
-          : r
-      ));
-      toast.success(pending.action === "approve" ? "Access approved · 24h grant active" : "Request rejected");
+    setSubmitting(true);
+    try {
+      const endpoint = pending.action === "approve"
+        ? "http://localhost:5000/api/access/approve-request"
+        : "http://localhost:5000/api/access/deny-request";
+
+      const res  = await fetch(endpoint, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ requestId: pending.req._id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Action failed");
+
+      toast.success(
+        pending.action === "approve"
+          ? "Access approved · 24h grant active"
+          : "Request rejected"
+      );
+      fetchIncoming(true);
       closeDialog();
-    }, 700);
+    } catch (e: any) {
+      toast.error(e.message || "Failed");
+      setSubmitting(false);
+    }
   };
 
-  // ── Filtered datasets ──────────────────────────────────────────────────────
-  const filtered = datasets.filter(d =>
+  /* ── Owner: revoke an approved request ─────────────────────────────────── */
+  const revokeAccess = async (req: IncomingRequest) => {
+    try {
+      const res  = await fetch("http://localhost:5000/api/access/revoke-access", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ requestId: req._id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Revoke failed");
+      toast.success("Access revoked");
+      fetchIncoming(true);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to revoke");
+    }
+  };
+
+  /* ── Researcher filtered datasets ─────────────────────────────────────── */
+  const filteredDs = datasets.filter(d =>
     search.trim() === "" ||
     d.originalName.toLowerCase().includes(search.toLowerCase()) ||
     d.owner?.name?.toLowerCase().includes(search.toLowerCase()) ||
     d.description?.toLowerCase().includes(search.toLowerCase())
   );
 
+  /* ── Owner filtered incoming ──────────────────────────────────────────── */
+  const filteredIn = incoming.filter(r =>
+    searchIn.trim() === "" ||
+    r.researcher.name.toLowerCase().includes(searchIn.toLowerCase()) ||
+    r.file.originalName.toLowerCase().includes(searchIn.toLowerCase())
+  );
+
   /* ════════════════════════════════════════════════════════════════
-     RESEARCHER VIEW — real-time data from API
+     RESEARCHER VIEW
   ════════════════════════════════════════════════════════════════ */
   if (!isOwner) {
     return (
@@ -266,7 +357,7 @@ const Requests = () => {
           title="Datasets"
           description={
             datasets.length > 0
-              ? `${datasets.length} genomic dataset${datasets.length !== 1 ? "s" : ""} available from data owners.`
+              ? `${datasets.length} genomic dataset${datasets.length !== 1 ? "s" : ""} available.`
               : "Browse available genomic datasets and request access."
           }
         />
@@ -287,8 +378,8 @@ const Requests = () => {
           </Button>
         </div>
 
-        {/* Loading skeleton */}
-        {loading && (
+        {/* Loading */}
+        {dsLoading && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {[...Array(6)].map((_, i) => (
               <div key={i} className="rounded-xl border border-border bg-card p-5 space-y-3 animate-pulse">
@@ -300,26 +391,25 @@ const Requests = () => {
                   </div>
                 </div>
                 <div className="h-3 bg-muted rounded w-full" />
-                <div className="h-3 bg-muted rounded w-4/5" />
                 <div className="h-9 bg-muted rounded-lg w-full mt-2" />
               </div>
             ))}
           </div>
         )}
 
-        {/* Error state */}
-        {!loading && error && (
+        {/* Error */}
+        {!dsLoading && dsError && (
           <div className="flex flex-col items-center justify-center py-16 text-center rounded-xl border border-dashed border-red-500/30 bg-red-500/5">
             <AlertTriangle className="h-10 w-10 text-red-400 mb-3" />
-            <p className="text-sm font-medium text-red-400">{error}</p>
+            <p className="text-sm font-medium text-red-400">{dsError}</p>
             <Button variant="outline" size="sm" className="mt-4" onClick={() => fetchDatasets()}>
               <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
             </Button>
           </div>
         )}
 
-        {/* Empty state */}
-        {!loading && !error && filtered.length === 0 && (
+        {/* Empty */}
+        {!dsLoading && !dsError && filteredDs.length === 0 && (
           <motion.div
             initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
             className="flex flex-col items-center justify-center text-center py-20 rounded-xl border border-dashed"
@@ -331,7 +421,7 @@ const Requests = () => {
               <>
                 <h3 className="text-lg font-semibold mb-1">No Datasets Available Yet</h3>
                 <p className="text-sm text-muted-foreground max-w-sm">
-                  Genomic files uploaded by data owners will appear here automatically in real time.
+                  Genomic files uploaded by data owners will appear here automatically.
                 </p>
               </>
             ) : (
@@ -344,22 +434,16 @@ const Requests = () => {
           </motion.div>
         )}
 
-        {/* Real dataset grid */}
-        {!loading && !error && filtered.length > 0 && (
+        {/* Dataset grid */}
+        {!dsLoading && !dsError && filteredDs.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filtered.map((ds, i) => {
+            {filteredDs.map((ds, i) => {
               const ext = EXT_COLORS[ds.extension] ?? EXT_COLORS[".vcf"];
               const isRequested  = requested.has(ds._id);
               const isRequesting = requesting === ds._id;
               return (
-                <motion.div
-                  key={ds._id}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                >
+                <motion.div key={ds._id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
                   <Card className="p-5 shadow-card hover:shadow-elegant transition-all h-full flex flex-col hover:border-primary/40 group">
-                    {/* Top row */}
                     <div className="flex items-start justify-between mb-3">
                       <div className={`h-11 w-11 rounded-xl flex items-center justify-center flex-shrink-0 ${ext.bg}`}>
                         <Dna className={`h-5 w-5 ${ext.text}`} />
@@ -370,48 +454,24 @@ const Requests = () => {
                             <Shield className="h-3 w-3" /> Encrypted
                           </span>
                         )}
-                        <Badge variant="secondary" className={`${ext.text} border-0`}>
-                          {ext.badge}
-                        </Badge>
+                        <Badge variant="secondary" className={`${ext.text} border-0`}>{ext.badge}</Badge>
                       </div>
                     </div>
-
-                    {/* File name */}
-                    <h3 className="font-semibold truncate text-sm" title={ds.originalName}>
-                      {ds.originalName}
-                    </h3>
-
-                    {/* Owner + meta */}
+                    <h3 className="font-semibold truncate text-sm" title={ds.originalName}>{ds.originalName}</h3>
                     <div className="flex flex-col gap-1 mt-2 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1.5">
                         <User className="h-3.5 w-3.5 flex-shrink-0" />
                         {ds.owner?.name ?? "Unknown Owner"}
                       </span>
                       <div className="flex gap-3">
-                        <span className="flex items-center gap-1.5">
-                          <HardDrive className="h-3.5 w-3.5 flex-shrink-0" />
-                          {formatSize(ds.sizeBytes)}
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <Calendar className="h-3.5 w-3.5 flex-shrink-0" />
-                          {formatDate(ds.createdAt)}
-                        </span>
+                        <span className="flex items-center gap-1.5"><HardDrive className="h-3.5 w-3.5" />{formatSize(ds.sizeBytes)}</span>
+                        <span className="flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5" />{formatDate(ds.createdAt)}</span>
                       </div>
                     </div>
-
-                    {/* Description */}
                     {ds.description && (
-                      <p className="text-sm text-muted-foreground mt-3 flex-1 line-clamp-2">
-                        {ds.description}
-                      </p>
+                      <p className="text-sm text-muted-foreground mt-3 flex-1 line-clamp-2">{ds.description}</p>
                     )}
-
-                    {/* IPFS status */}
-                    <div className="mt-3 mb-1">
-                      <IpfsPill status={ds.ipfsStatus} />
-                    </div>
-
-                    {/* Request access button */}
+                    <div className="mt-3 mb-1"><IpfsPill status={ds.ipfsStatus} /></div>
                     <Button
                       className="mt-3 w-full"
                       variant={isRequested ? "secondary" : "default"}
@@ -437,48 +497,160 @@ const Requests = () => {
   }
 
   /* ════════════════════════════════════════════════════════════════
-     OWNER VIEW — access requests
+     OWNER VIEW — real incoming requests
   ════════════════════════════════════════════════════════════════ */
   return (
     <>
-      <PageHeader title="Access Requests" description="Review and approve researcher requests with PIN verification." />
+      <PageHeader
+        title="Access Requests"
+        description="Review and manage researcher access requests. All decisions are recorded on the blockchain."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => fetchIncoming(true)} disabled={inRefreshing}>
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${inRefreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        }
+      />
 
-      <div className="space-y-3">
-        {requests.map((r, i) => (
-          <motion.div key={r.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-            <Card className="p-5 shadow-card">
-              <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold truncate">{r.researcher}</h3>
-                    <Badge variant="outline" className="text-xs">{r.email}</Badge>
-                    <Badge className={
-                      r.status === "Pending"  ? "bg-warning text-warning-foreground" :
-                      r.status === "Approved" ? "bg-success text-success-foreground" :
-                      "bg-destructive text-destructive-foreground"
-                    }>{r.status}</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Requesting <span className="font-mono text-foreground">{r.dataset}</span> — {r.purpose}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">{r.requestedAt}</p>
-                </div>
-
-                {r.status === "Pending" && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={() => openDialog(r, "reject")}>
-                      <X className="h-4 w-4 mr-1" />Reject
-                    </Button>
-                    <Button onClick={() => openDialog(r, "approve")} className="bg-gradient-primary hover:opacity-90 shadow-elegant">
-                      <Check className="h-4 w-4 mr-1" />Approve
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </Card>
-          </motion.div>
-        ))}
+      {/* Search */}
+      <div className="relative mb-5 max-w-xs">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search by researcher or file…"
+          className="pl-9"
+          value={searchIn}
+          onChange={e => setSearchIn(e.target.value)}
+        />
       </div>
+
+      {/* Loading */}
+      {inLoading && (
+        <div className="space-y-3">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="rounded-xl border border-border bg-card p-5 animate-pulse">
+              <div className="flex items-center gap-4">
+                <div className="h-10 w-10 rounded-full bg-muted" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 bg-muted rounded w-1/3" />
+                  <div className="h-3 bg-muted rounded w-1/2" />
+                </div>
+                <div className="flex gap-2">
+                  <div className="h-9 w-20 bg-muted rounded-lg" />
+                  <div className="h-9 w-20 bg-muted rounded-lg" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Error */}
+      {!inLoading && inError && (
+        <div className="flex flex-col items-center py-12 text-center rounded-xl border border-dashed border-red-500/30 bg-red-500/5">
+          <AlertTriangle className="h-8 w-8 text-red-400 mb-2" />
+          <p className="text-sm text-red-400">{inError}</p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => fetchIncoming()}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Empty */}
+      {!inLoading && !inError && filteredIn.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col items-center py-20 text-center rounded-xl border border-dashed"
+        >
+          <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center mb-4">
+            <ShieldCheck className="h-7 w-7 text-muted-foreground" />
+          </div>
+          <h3 className="font-semibold mb-1">
+            {incoming.length === 0 ? "No Requests Yet" : "No Results"}
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            {incoming.length === 0
+              ? "When researchers request access to your files, they'll appear here."
+              : "No requests match your search."}
+          </p>
+        </motion.div>
+      )}
+
+      {/* Request list */}
+      {!inLoading && !inError && filteredIn.length > 0 && (
+        <div className="space-y-3">
+          {filteredIn.map((r, i) => {
+            const statusCls = STATUS_COLORS[r.status] ?? "bg-zinc-500/20 text-zinc-400";
+            return (
+              <motion.div key={r._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
+                <Card className="p-5 shadow-card">
+                  <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <h3 className="font-semibold text-sm">{r.researcher.name}</h3>
+                        <Badge variant="outline" className="text-xs">{r.researcher.email}</Badge>
+                        {r.researcher.orcid && (
+                          <Badge variant="outline" className="text-xs font-mono text-blue-400 border-blue-400/30">{r.researcher.orcid}</Badge>
+                        )}
+                        <Badge className={`text-xs capitalize ${statusCls}`}>{r.status}</Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        File: <span className="font-mono text-foreground text-xs">{r.file.originalName}</span>
+                      </p>
+                      {r.reason && (
+                        <p className="text-xs text-muted-foreground mt-0.5">Reason: {r.reason}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-0.5">Requested {formatDate(r.createdAt)}</p>
+
+                      {/* Blockchain receipt links */}
+                      {(r.approveTxHash || r.rejectTxHash || r.revokeTxHash) && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {r.approveEtherscanUrl && (
+                            <a href={r.approveEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
+                              <ExternalLink className="h-3 w-3" />Approve tx
+                            </a>
+                          )}
+                          {r.rejectEtherscanUrl && (
+                            <a href={r.rejectEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-red-400 hover:underline">
+                              <ExternalLink className="h-3 w-3" />Reject tx
+                            </a>
+                          )}
+                          {r.revokeEtherscanUrl && (
+                            <a href={r.revokeEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:underline">
+                              <ExternalLink className="h-3 w-3" />Revoke tx
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2 flex-shrink-0">
+                      {r.status === "pending" && (
+                        <>
+                          <Button variant="outline" size="sm" onClick={() => openDialog(r, "reject")}>
+                            <X className="h-4 w-4 mr-1" />Reject
+                          </Button>
+                          <Button size="sm" onClick={() => openDialog(r, "approve")} className="bg-gradient-primary hover:opacity-90 shadow-elegant">
+                            <Check className="h-4 w-4 mr-1" />Approve
+                          </Button>
+                        </>
+                      )}
+                      {r.status === "approved" && (
+                        <Button variant="outline" size="sm" onClick={() => revokeAccess(r)}
+                          className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                          <RotateCcw className="h-4 w-4 mr-1" />Revoke
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Modals */}
       <AnimatePresence>
@@ -497,22 +669,20 @@ const Requests = () => {
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Are you sure you want to <span className={`font-medium ${pending.action === "approve" ? "text-primary" : "text-destructive"}`}>{pending.action}</span> the request from{" "}
-                    <span className="text-foreground font-medium">{pending.req.researcher}</span>?
+                    <span className="text-foreground font-medium">{pending.req.researcher.name}</span>?
                   </p>
                 </div>
               </div>
-
               <div className={`rounded-xl border p-3 text-xs ${pending.action === "approve" ? "border-primary/20 bg-primary/5 text-primary" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
                 {pending.action === "approve"
-                  ? "A 24-hour access grant will be created for this researcher."
-                  : "The researcher will be notified that their request was rejected."}
+                  ? "A 24-hour blockchain-verified access grant will be created. All events are recorded on Sepolia Testnet."
+                  : "The request will be permanently rejected on the blockchain."}
               </div>
-
               <div className="flex gap-2 pt-1">
                 <Button variant="outline" className="flex-1" onClick={closeDialog}>No, go back</Button>
                 <Button
                   className={`flex-1 ${pending.action === "approve" ? "bg-gradient-primary hover:opacity-90 text-primary-foreground" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}`}
-                  onClick={onConfirmYes}
+                  onClick={() => setStep("pin")}
                 >
                   Yes, {pending.action}
                 </Button>
@@ -525,10 +695,10 @@ const Requests = () => {
           <Modal onClose={closeDialog}>
             <PinStep
               action={pending.action}
-              researcher={pending.req.researcher}
+              researcher={pending.req.researcher.name}
               onSuccess={onPinSuccess}
               onCancel={closeDialog}
-              isLoading={verifying}
+              isLoading={submitting}
             />
           </Modal>
         )}
