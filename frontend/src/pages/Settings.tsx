@@ -224,12 +224,7 @@ export default function Settings() {
 
 
   // ── Session ────────────────────────────────────────────────────
-  const MOCK_SESSIONS = [
-    { id: "s1", device: "Chrome · Windows", location: "Mumbai, IN", current: true, lastSeen: "Now" },
-    { id: "s2", device: "Safari · iPhone", location: "Mumbai, IN", current: false, lastSeen: "2h ago" },
-    { id: "s3", device: "Firefox · MacOS", location: "Pune, IN", current: false, lastSeen: "3d ago" },
-  ];
-  const [sessions, setSessions] = useState(MOCK_SESSIONS);
+  // No additional sessions are tracked — only the current session is shown.
 
   if (!user) return null;
 
@@ -237,10 +232,6 @@ export default function Settings() {
     toast({ title: `${section} saved!` });
   };
 
-  const revokeSession = (id: string) => {
-    setSessions((s) => s.filter((x) => x.id !== id));
-    toast({ title: "Session revoked" });
-  };
 
   return (
     <div className="max-w-2xl mx-auto py-8 px-4 space-y-6">
@@ -554,50 +545,24 @@ export default function Settings() {
       {/* ── 5. Active Sessions ── */}
       <SettingsSection title="Active Sessions" icon={<Monitor className="h-4 w-4" />} delay={0.2}>
         <div className="space-y-2">
-          {sessions.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-center justify-between px-3 py-3 rounded-lg border border-border/70 bg-muted/20"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{s.device}</p>
-                  {s.current && (
-                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0 text-green-500 border-green-500/30 bg-green-500/10">
-                      Current
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {s.location} · {s.lastSeen}
-                </p>
+          {/* Current session — derived from JWT */}
+          <div className="flex items-center justify-between px-3 py-3 rounded-lg border border-border/70 bg-muted/20">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium truncate">This browser · Current device</p>
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 text-green-500 border-green-500/30 bg-green-500/10">
+                  Current
+                </Badge>
               </div>
-              {!s.current && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
-                  onClick={() => revokeSession(s.id)}
-                >
-                  Revoke
-                </Button>
-              )}
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Signed in as {user?.email}
+              </p>
             </div>
-          ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2 px-1">
+            Session management is handled via JWT tokens. Signing out invalidates your current token.
+          </p>
         </div>
-        {sessions.filter((s) => !s.current).length > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3 text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/10"
-            onClick={() => {
-              setSessions((s) => s.filter((x) => x.current));
-              toast({ title: "All other sessions revoked" });
-            }}
-          >
-            Revoke all other sessions
-          </Button>
-        )}
       </SettingsSection>
 
       {/* ── 5. Danger Zone ── */}
