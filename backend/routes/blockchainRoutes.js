@@ -19,8 +19,10 @@ const {
   storeHash,
   handleRequestAccess,
   handleApproveAccess,
+  handleRejectAccess,
   handleRevokeAccess,
   handleCheckAccess,
+  handleGetRequests,
 } = require("../controllers/blockchainController");
 
 // ── Public ───────────────────────────────────────────────────────────────────
@@ -49,16 +51,22 @@ router.post("/store", protect, storeHash);
 
 // ── Access Control ────────────────────────────────────────────────────────────
 
-// POST /api/blockchain/request-access  — { fileId }  (researcher)
+// POST /api/blockchain/request-access  — { fileId, researcherOrcid }  (researcher)
 router.post("/request-access", protect, handleRequestAccess);
 
-// POST /api/blockchain/approve-access  — { fileId, researcherAddress, durationSeconds? }  (owner)
+// POST /api/blockchain/approve-access  — { fileId, researcherOrcid, durationSeconds? }  (owner)
 router.post("/approve-access", protect, handleApproveAccess);
 
-// POST /api/blockchain/revoke-access   — { fileId, researcherAddress }  (owner)
+// POST /api/blockchain/reject-access   — { fileId, researcherOrcid }  (owner)
+router.post("/reject-access", protect, handleRejectAccess);
+
+// POST /api/blockchain/revoke-access   — { fileId, researcherOrcid }  (owner)
 router.post("/revoke-access", protect, handleRevokeAccess);
 
-// GET /api/blockchain/check-access/:fileId/:researcherAddress
-router.get("/check-access/:fileId/:researcherAddress", protect, handleCheckAccess);
+// GET /api/blockchain/check-access/:fileId/:researcherOrcid  (URL-encoded ORCID)
+router.get("/check-access/:fileId/:researcherOrcid", protect, handleCheckAccess);
+
+// GET /api/blockchain/requests/:fileId  — on-chain requests for a file (owner dashboard)
+router.get("/requests/:fileId", protect, handleGetRequests);
 
 module.exports = router;
