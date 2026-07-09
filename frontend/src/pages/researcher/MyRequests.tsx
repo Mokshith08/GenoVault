@@ -1,21 +1,30 @@
 import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ClipboardList, RefreshCw, AlertTriangle, HardDrive, Calendar, User, Clock } from "lucide-react";
+import { ClipboardList, RefreshCw, AlertTriangle, HardDrive, Calendar, User, Clock, ExternalLink } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 
 // ── Types ─────────────────────────────────────────────────────────
 interface AccessReq {
   _id:             string;
-  status:          "pending" | "approved" | "denied";
+  status:          "pending" | "approved" | "denied" | "rejected" | "revoked";
   reason?:         string;
   createdAt:       string;
   accessExpiresAt?: string;
+  // Blockchain receipt
+  requestTxHash?:      string;
+  requestEtherscanUrl?: string;
+  approveTxHash?:      string;
+  approveEtherscanUrl?: string;
+  rejectTxHash?:       string;
+  rejectEtherscanUrl?: string;
+  revokeTxHash?:       string;
+  revokeEtherscanUrl?: string;
   file: {
     _id:          string;
     originalName: string;
@@ -43,15 +52,11 @@ function formatSize(bytes: number) {
 function StatusBadge({ status, expiresAt }: { status: string; expiresAt?: string }) {
   const isExpired = expiresAt && new Date(expiresAt).getTime() < Date.now();
 
-  if (status === "approved" && !isExpired) {
-    return <Badge className="bg-emerald-500/15 text-emerald-400 border-0">Approved</Badge>;
-  }
-  if (status === "approved" && isExpired) {
-    return <Badge className="bg-muted text-muted-foreground border-0">Expired</Badge>;
-  }
-  if (status === "denied") {
-    return <Badge className="bg-red-500/15 text-red-400 border-0">Denied</Badge>;
-  }
+  if (status === "approved" && !isExpired) return <Badge className="bg-emerald-500/15 text-emerald-400 border-0">Approved</Badge>;
+  if (status === "approved" && isExpired)  return <Badge className="bg-muted text-muted-foreground border-0">Expired</Badge>;
+  if (status === "denied")   return <Badge className="bg-red-500/15 text-red-400 border-0">Denied</Badge>;
+  if (status === "rejected") return <Badge className="bg-red-500/15 text-red-400 border-0">Rejected</Badge>;
+  if (status === "revoked")  return <Badge className="bg-zinc-500/15 text-zinc-400 border-0">Revoked</Badge>;
   return <Badge className="bg-amber-500/15 text-amber-400 border-0">Pending</Badge>;
 }
 
@@ -128,11 +133,12 @@ export default function MyRequests() {
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
-                  <TableHead className="w-[260px]">Dataset</TableHead>
+                  <TableHead className="w-[240px]">Dataset</TableHead>
                   <TableHead>Owner</TableHead>
                   <TableHead>Size</TableHead>
                   <TableHead>Requested On</TableHead>
                   <TableHead>Expires</TableHead>
+                  <TableHead>Blockchain Tx</TableHead>
                   <TableHead className="text-right">Status</TableHead>
                 </TableRow>
               </TableHeader>
@@ -140,7 +146,7 @@ export default function MyRequests() {
                 {/* Loading rows */}
                 {loading && [...Array(4)].map((_, i) => (
                   <TableRow key={i}>
-                    {[...Array(6)].map((_, j) => (
+                    {[...Array(7)].map((_, j) => (
                       <TableCell key={j}>
                         <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
                       </TableCell>
@@ -198,13 +204,47 @@ export default function MyRequests() {
                     <TableCell className="text-right">
                       <StatusBadge status={r.status} expiresAt={r.accessExpiresAt} />
                     </TableCell>
+                    {/* Blockchain Tx column */}
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        {r.requestEtherscanUrl && (
+                          <a href={r.requestEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-amber-400 hover:underline">
+                            <ExternalLink className="h-3 w-3" />Request tx
+                          </a>
+                        )}
+                        {r.approveEtherscanUrl && (
+                          <a href={r.approveEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
+                            <ExternalLink className="h-3 w-3" />Approve tx
+                          </a>
+                        )}
+                        {r.rejectEtherscanUrl && (
+                          <a href={r.rejectEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-red-400 hover:underline">
+                            <ExternalLink className="h-3 w-3" />Reject tx
+                          </a>
+                        )}
+                        {r.revokeTxHash && (
+                          <a href={r.revokeEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:underline">
+                            <ExternalLink className="h-3 w-3" />Revoke tx
+                          </a>
+                        )}
+                        {!r.requestEtherscanUrl && !r.approveEtherscanUrl && !r.rejectEtherscanUrl && !r.revokeTxHash && (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <StatusBadge status={r.status} expiresAt={r.accessExpiresAt} />
+                    </TableCell>
                   </motion.tr>
                 ))}
 
-                {/* Empty state */}
                 {!loading && requests.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-52 text-center">
+                    <TableCell colSpan={7} className="h-52 text-center">
                       <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
