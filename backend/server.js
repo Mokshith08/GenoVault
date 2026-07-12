@@ -15,6 +15,7 @@ const otpRoutes         = require("./routes/otpRoutes");
 const fileRoutes        = require("./routes/fileRoutes");
 const accessRoutes      = require("./routes/accessRoutes");
 const blockchainRoutes  = require("./routes/blockchainRoutes");
+const auditRoutes       = require("./routes/auditRoutes");
 
 
 // ─────────────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ app.use("/api/otp",        otpRoutes);
 app.use("/api/files",      fileRoutes);
 app.use("/api/access",     accessRoutes);
 app.use("/api/blockchain", blockchainRoutes); // Ethereum integration
+app.use("/api/audit",      auditRoutes);      // Unified blockchain audit trail
 
 // Health check (useful for deployment / monitoring)
 app.get("/api/health", (req, res) => {
