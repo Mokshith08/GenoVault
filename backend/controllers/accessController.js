@@ -25,6 +25,14 @@ const AccessRequest  = require("../models/AccessRequest");
 const { retrieveEncryptionKey, retrievePinHash } = require("../services/keyVaultService");
 const { decryptBuffer }                  = require("../services/encryptionService");
 const { downloadBlobToBuffer }           = require("../services/azureService");
+const {
+  requestAccess:   blockchainRequestAccess,
+  approveAccess:   blockchainApproveAccess,
+  rejectAccess:    blockchainRejectAccess,
+  revokeAccess:    blockchainRevokeAccess,
+  checkAccess:     blockchainCheckAccess,
+  isBlockchainConfigured,
+} = require("../services/blockchainService");
 
 const ACCESS_GRANT_HOURS = parseInt(process.env.ACCESS_GRANT_HOURS) || 24;
 
@@ -73,6 +81,32 @@ const requestAccess = async (req, res) => {
       status:     "pending",
     });
 
+    // -- Blockchain: record access request on-chain (non-blocking)
+    // Requires the researcher to have an ORCID set in their profile.
+    if (isBlockchainConfigured() && file.blockchainFileId) {
+      const researcher = await User.findById(researcherId).select("orcid");
+      if (researcher && researcher.orcid) {
+        blockchainRequestAccess(file.blockchainFileId, researcher.orcid)
+          .then(async (bcResult) => {
+            if (bcResult.success) {
+              await AccessRequest.findByIdAndUpdate(accessRequest._id, {
+                requestTxHash:       bcResult.blockchainTxHash,
+                requestBlockNumber:  bcResult.blockchainBlock,
+                requestGasUsed:      bcResult.gasUsed,
+                requestTxStatus:     bcResult.transactionStatus,
+                requestEtherscanUrl: bcResult.etherscanUrl,
+              });
+              console.log(`[AccessController] Blockchain request tx: ${bcResult.blockchainTxHash}`);
+            } else {
+              console.warn(`[AccessController] Blockchain request failed (non-blocking): ${bcResult.error}`);
+            }
+          })
+          .catch((e) => console.warn("[AccessController] Blockchain request error (non-blocking):", e.message));
+      } else {
+        console.warn(`[AccessController] Researcher ${researcherId} has no ORCID — skipping blockchain request`);
+      }
+    }
+
     return res.status(201).json({
       success: true,
       message: "Access request submitted. The data owner will be notified.",
@@ -101,7 +135,7 @@ const approveRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: "requestId is required" });
     }
 
-    const request = await AccessRequest.findById(requestId).populate("file");
+    const request = await AccessRequest.findById(requestId).populate("file").populate("researcher", "orcid");
     if (!request) {
       return res.status(404).json({ success: false, message: "Access request not found" });
     }
@@ -118,13 +152,33 @@ const approveRequest = async (req, res) => {
       });
     }
 
-    const now          = new Date();
-    const expiresAt    = new Date(now.getTime() + ACCESS_GRANT_HOURS * 60 * 60 * 1000);
+    const now       = new Date();
+    const expiresAt = new Date(now.getTime() + ACCESS_GRANT_HOURS * 60 * 60 * 1000);
 
     request.status          = "approved";
     request.approvedAt      = now;
     request.accessExpiresAt = expiresAt;
     await request.save();
+
+    // -- Blockchain: approve access on-chain (non-blocking)
+    if (isBlockchainConfigured() && request.file && request.file.blockchainFileId && request.researcher && request.researcher.orcid) {
+      blockchainApproveAccess(request.file.blockchainFileId, request.researcher.orcid, ACCESS_GRANT_HOURS * 3600)
+        .then(async (bcResult) => {
+          if (bcResult.success) {
+            await AccessRequest.findByIdAndUpdate(requestId, {
+              approveTxHash:       bcResult.blockchainTxHash,
+              approveBlockNumber:  bcResult.blockchainBlock,
+              approveGasUsed:      bcResult.gasUsed,
+              approveTxStatus:     bcResult.transactionStatus,
+              approveEtherscanUrl: bcResult.etherscanUrl,
+            });
+            console.log(`[AccessController] Blockchain approve tx: ${bcResult.blockchainTxHash}`);
+          } else {
+            console.warn(`[AccessController] Blockchain approve failed (non-blocking): ${bcResult.error}`);
+          }
+        })
+        .catch((e) => console.warn("[AccessController] Blockchain approve error (non-blocking):", e.message));
+    }
 
     return res.status(200).json({
       success: true,
@@ -153,7 +207,7 @@ const denyRequest = async (req, res) => {
     const { requestId } = req.body;
     const ownerId       = req.user.userId;
 
-    const request = await AccessRequest.findById(requestId);
+    const request = await AccessRequest.findById(requestId).populate("file").populate("researcher", "orcid");
     if (!request) {
       return res.status(404).json({ success: false, message: "Request not found" });
     }
@@ -164,13 +218,86 @@ const denyRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: `Request is already ${request.status}` });
     }
 
-    request.status = "denied";
+    request.status = "rejected";
     await request.save();
 
-    return res.status(200).json({ success: true, message: "Request denied." });
+    // -- Blockchain: reject access on-chain (non-blocking)
+    if (isBlockchainConfigured() && request.file && request.file.blockchainFileId && request.researcher && request.researcher.orcid) {
+      blockchainRejectAccess(request.file.blockchainFileId, request.researcher.orcid)
+        .then(async (bcResult) => {
+          if (bcResult.success) {
+            await AccessRequest.findByIdAndUpdate(requestId, {
+              rejectTxHash:       bcResult.blockchainTxHash,
+              rejectBlockNumber:  bcResult.blockchainBlock,
+              rejectGasUsed:      bcResult.gasUsed,
+              rejectTxStatus:     bcResult.transactionStatus,
+              rejectEtherscanUrl: bcResult.etherscanUrl,
+            });
+            console.log(`[AccessController] Blockchain reject tx: ${bcResult.blockchainTxHash}`);
+          } else {
+            console.warn(`[AccessController] Blockchain reject failed (non-blocking): ${bcResult.error}`);
+          }
+        })
+        .catch((e) => console.warn("[AccessController] Blockchain reject error (non-blocking):", e.message));
+    }
+
+    return res.status(200).json({ success: true, message: "Request rejected." });
   } catch (err) {
     console.error("[denyRequest]", err);
     return res.status(500).json({ success: false, message: "Failed to deny request" });
+  }
+};
+
+/* -----------------------------------------------------------------
+   POST /api/access/revoke-access
+   Protected - owner role only
+
+   Body: { requestId }
+   Revokes an approved access (manual early revocation).
+-----------------------------------------------------------------*/
+const revokeRequest = async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    const ownerId       = req.user.userId;
+
+    const request = await AccessRequest.findById(requestId).populate("file").populate("researcher", "orcid");
+    if (!request) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+    if (String(request.owner) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+    if (request.status !== "approved") {
+      return res.status(400).json({ success: false, message: "Only approved requests can be revoked" });
+    }
+
+    request.status = "revoked";
+    await request.save();
+
+    // -- Blockchain: revoke access on-chain (non-blocking)
+    if (isBlockchainConfigured() && request.file && request.file.blockchainFileId && request.researcher && request.researcher.orcid) {
+      blockchainRevokeAccess(request.file.blockchainFileId, request.researcher.orcid)
+        .then(async (bcResult) => {
+          if (bcResult.success) {
+            await AccessRequest.findByIdAndUpdate(requestId, {
+              revokeTxHash:       bcResult.blockchainTxHash,
+              revokeBlockNumber:  bcResult.blockchainBlock,
+              revokeGasUsed:      bcResult.gasUsed,
+              revokeTxStatus:     bcResult.transactionStatus,
+              revokeEtherscanUrl: bcResult.etherscanUrl,
+            });
+            console.log(`[AccessController] Blockchain revoke tx: ${bcResult.blockchainTxHash}`);
+          } else {
+            console.warn(`[AccessController] Blockchain revoke failed (non-blocking): ${bcResult.error}`);
+          }
+        })
+        .catch((e) => console.warn("[AccessController] Blockchain revoke error (non-blocking):", e.message));
+    }
+
+    return res.status(200).json({ success: true, message: "Access revoked." });
+  } catch (err) {
+    console.error("[revokeRequest]", err);
+    return res.status(500).json({ success: false, message: "Failed to revoke access" });
   }
 };
 
@@ -259,13 +386,13 @@ const downloadFile = async (req, res) => {
     const { fileId }    = req.params;
     const researcherId  = req.user.userId;
 
-    // ── 1. Find file metadata ──────────────────────────────────
+    // -- 1. Find file metadata
     const file = await GenomicFile.findById(fileId).select("+encryptionIv");
     if (!file || file.uploadStatus !== "confirmed") {
       return res.status(404).json({ success: false, message: "File not found" });
     }
 
-    // ── 2. Check researcher has approved, non-expired access ───
+    // -- 2. Check researcher has approved, non-expired access (MongoDB gate)
     const now     = new Date();
     const request = await AccessRequest.findOne({
       file:       fileId,
@@ -287,11 +414,27 @@ const downloadFile = async (req, res) => {
       });
     }
 
-    // ── 3. Fetch encrypted bytes from Azure ────────────────────
+    // -- 3. Blockchain gate: verify access on-chain (read-only, zero gas)
+    // Only enforced when blockchain is configured and file is registered on-chain.
+    if (isBlockchainConfigured() && file.blockchainFileId) {
+      const researcher = await User.findById(researcherId).select("orcid");
+      if (researcher && researcher.orcid) {
+        const bcCheck = await blockchainCheckAccess(file.blockchainFileId, researcher.orcid);
+        if (!bcCheck.hasAccess && !bcCheck.disabled) {
+          console.warn(`[Download] Blockchain gate: access denied for researcher ${researcherId} on file ${fileId}`);
+          return res.status(403).json({
+            success: false,
+            message: "Blockchain verification failed: access not approved or has expired on-chain.",
+          });
+        }
+      }
+    }
+
+    // -- 4. Fetch encrypted bytes from Azure
     console.log(`[Download] Fetching encrypted file from Azure: ${file.azureBlobName}`);
     const encryptedBuffer = await downloadBlobToBuffer(file.azureBlobName);
 
-    // ── 4. Handle non-encrypted files (legacy) ─────────────────
+    // -- 5. Handle non-encrypted files (legacy)
     if (!file.isEncrypted || !file.encryptionIv) {
       console.warn(`[Download] File ${fileId} is not encrypted — serving raw bytes`);
       res.setHeader("Content-Disposition", `attachment; filename="${file.originalName}"`);
@@ -300,11 +443,11 @@ const downloadFile = async (req, res) => {
       return res.send(encryptedBuffer);
     }
 
-    // ── 5. Retrieve AES key from Azure Key Vault ───────────────
+    // -- 6. Retrieve AES key from Azure Key Vault
     console.log(`[Download] Retrieving AES key from Key Vault for file: ${fileId}`);
     const aesKeyHex = await retrieveEncryptionKey(String(file._id));
 
-    // ── 6. Decrypt in-memory ───────────────────────────────────
+    // -- 7. Decrypt in-memory
     console.log(`[Download] Decrypting file: ${file.originalName}`);
     const decryptedBuffer = decryptBuffer(encryptedBuffer, aesKeyHex, file.encryptionIv);
 
@@ -370,6 +513,7 @@ module.exports = {
   requestAccess,
   approveRequest,
   denyRequest,
+  revokeRequest,
   verifyPin,
   downloadFile,
   getMyRequests,
