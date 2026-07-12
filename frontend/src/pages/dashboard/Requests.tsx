@@ -637,12 +637,19 @@ const Requests = () => {
                           </Button>
                         </>
                       )}
-                      {r.status === "approved" && (
-                        <Button variant="outline" size="sm" onClick={() => revokeAccess(r)}
-                          className="text-destructive border-destructive/30 hover:bg-destructive/10">
-                          <RotateCcw className="h-4 w-4 mr-1" />Revoke
-                        </Button>
-                      )}
+                      {r.status === "approved" && (() => {
+                        const isExpired = r.accessExpiresAt
+                          ? new Date(r.accessExpiresAt).getTime() <= Date.now()
+                          : false;
+                        return isExpired ? (
+                          <span className="text-xs text-muted-foreground italic px-2">Access expired</span>
+                        ) : (
+                          <Button variant="outline" size="sm" onClick={() => revokeAccess(r)}
+                            className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                            <RotateCcw className="h-4 w-4 mr-1" />Revoke
+                          </Button>
+                        );
+                      })()}
                     </div>
                   </div>
                 </Card>
