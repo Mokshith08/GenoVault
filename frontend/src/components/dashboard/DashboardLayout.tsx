@@ -26,6 +26,8 @@ export const DashboardLayout = () => {
   const navigate = useNavigate();
 
   if (!user) return <Navigate to="/login" replace />;
+  // Researchers have their own layout — redirect them away from the owner dashboard
+  if (user.role === "researcher") return <Navigate to="/researcher" replace />;
 
   return (
     <SidebarProvider>
