@@ -28,8 +28,10 @@ const {
   isBlockchainConfigured,
   requestAccess,
   approveAccess,
+  rejectAccess,
   revokeAccess,
   checkAccess,
+  getPendingRequests,
   getAuditTrail,
 } = require("../services/blockchainService");
 
@@ -184,19 +186,23 @@ const storeHash = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const handleRequestAccess = async (req, res) => {
   try {
-    const { fileId } = req.body;
+    const { fileId, researcherOrcid } = req.body;
     if (!fileId) return res.status(400).json({ success: false, message: "fileId is required" });
+    if (!researcherOrcid) return res.status(400).json({ success: false, message: "researcherOrcid is required" });
 
-    const result = await requestAccess(Number(fileId));
+    const result = await requestAccess(Number(fileId), researcherOrcid);
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error || "Failed to request access" });
     }
     return res.status(200).json({
-      success:  true,
-      message:  "Access request recorded permanently on Sepolia blockchain",
-      fileId:   Number(fileId),
-      txHash:   result.txHash,
-      block:    result.blockNumber,
+      success:           true,
+      message:           "Access request recorded on Sepolia blockchain",
+      fileId:            Number(fileId),
+      blockchainTxHash:  result.blockchainTxHash,
+      blockchainBlock:   result.blockchainBlock,
+      gasUsed:           result.gasUsed,
+      transactionStatus: result.transactionStatus,
+      etherscanUrl:      result.etherscanUrl,
     });
   } catch (err) {
     console.error("[blockchainController.requestAccess]", err);
@@ -214,25 +220,24 @@ const handleApproveAccess = async (req, res) => {
     if (req.user.role !== "owner") {
       return res.status(403).json({ success: false, message: "Only data owners can approve access" });
     }
-    const { fileId, researcherAddress, durationSeconds = 86400 } = req.body;
-    if (!fileId || !researcherAddress) {
-      return res.status(400).json({ success: false, message: "fileId and researcherAddress are required" });
+    const { fileId, researcherOrcid, durationSeconds = 86400 } = req.body;
+    if (!fileId || !researcherOrcid) {
+      return res.status(400).json({ success: false, message: "fileId and researcherOrcid are required" });
     }
-    if (!researcherAddress.startsWith("0x") || researcherAddress.length !== 42) {
-      return res.status(400).json({ success: false, message: "Invalid Ethereum address" });
-    }
-    const result = await approveAccess(Number(fileId), researcherAddress, Number(durationSeconds));
+    const result = await approveAccess(Number(fileId), researcherOrcid, Number(durationSeconds));
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error || "Failed to approve access" });
     }
     return res.status(200).json({
-      success:    true,
-      message:    "Access approved — permanently recorded on Sepolia blockchain",
-      fileId:     Number(fileId),
-      researcher: researcherAddress,
-      expiresAt:  result.expiresAt,
-      txHash:     result.txHash,
-      block:      result.blockNumber,
+      success:           true,
+      message:           "Access approved on Sepolia blockchain",
+      fileId:            Number(fileId),
+      expiresAt:         result.expiresAt,
+      blockchainTxHash:  result.blockchainTxHash,
+      blockchainBlock:   result.blockchainBlock,
+      gasUsed:           result.gasUsed,
+      transactionStatus: result.transactionStatus,
+      etherscanUrl:      result.etherscanUrl,
     });
   } catch (err) {
     console.error("[blockchainController.approveAccess]", err);
@@ -250,25 +255,83 @@ const handleRevokeAccess = async (req, res) => {
     if (req.user.role !== "owner") {
       return res.status(403).json({ success: false, message: "Only data owners can revoke access" });
     }
-    const { fileId, researcherAddress } = req.body;
-    if (!fileId || !researcherAddress) {
-      return res.status(400).json({ success: false, message: "fileId and researcherAddress are required" });
+    const { fileId, researcherOrcid } = req.body;
+    if (!fileId || !researcherOrcid) {
+      return res.status(400).json({ success: false, message: "fileId and researcherOrcid are required" });
     }
-    const result = await revokeAccess(Number(fileId), researcherAddress);
+    const result = await revokeAccess(Number(fileId), researcherOrcid);
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error || "Failed to revoke access" });
     }
     return res.status(200).json({
-      success:    true,
-      message:    "Access revoked — permanently recorded on Sepolia blockchain",
-      fileId:     Number(fileId),
-      researcher: researcherAddress,
-      txHash:     result.txHash,
-      block:      result.blockNumber,
+      success:           true,
+      message:           "Access revoked on Sepolia blockchain",
+      fileId:            Number(fileId),
+      blockchainTxHash:  result.blockchainTxHash,
+      blockchainBlock:   result.blockchainBlock,
+      gasUsed:           result.gasUsed,
+      transactionStatus: result.transactionStatus,
+      etherscanUrl:      result.etherscanUrl,
     });
   } catch (err) {
     console.error("[blockchainController.revokeAccess]", err);
     return res.status(500).json({ success: false, message: "Failed to revoke access" });
+  }
+};
+
+// POST /api/blockchain/reject-access
+// Body: { fileId, researcherOrcid }
+// Owner rejects a researcher's pending access request
+const handleRejectAccess = async (req, res) => {
+  try {
+    if (req.user.role !== "owner") {
+      return res.status(403).json({ success: false, message: "Only data owners can reject access" });
+    }
+    const { fileId, researcherOrcid } = req.body;
+    if (!fileId || !researcherOrcid) {
+      return res.status(400).json({ success: false, message: "fileId and researcherOrcid are required" });
+    }
+    const result = await rejectAccess(Number(fileId), researcherOrcid);
+    if (!result.success) {
+      return res.status(400).json({ success: false, message: result.error || "Failed to reject access" });
+    }
+    return res.status(200).json({
+      success:           true,
+      message:           "Access rejected on Sepolia blockchain",
+      fileId:            Number(fileId),
+      blockchainTxHash:  result.blockchainTxHash,
+      blockchainBlock:   result.blockchainBlock,
+      gasUsed:           result.gasUsed,
+      transactionStatus: result.transactionStatus,
+      etherscanUrl:      result.etherscanUrl,
+    });
+  } catch (err) {
+    console.error("[blockchainController.rejectAccess]", err);
+    return res.status(500).json({ success: false, message: "Failed to reject access" });
+  }
+};
+
+// GET /api/blockchain/requests/:fileId
+// Returns all access requests stored on-chain for a file (owner dashboard)
+const handleGetRequests = async (req, res) => {
+  try {
+    if (req.user.role !== "owner") {
+      return res.status(403).json({ success: false, message: "Only data owners can view requests" });
+    }
+    const fileId = parseInt(req.params.fileId);
+    if (!fileId || fileId < 1) {
+      return res.status(400).json({ success: false, message: "Invalid fileId" });
+    }
+    const requests = await getPendingRequests(fileId);
+    return res.status(200).json({
+      success:  true,
+      fileId,
+      count:    requests.length,
+      requests,
+    });
+  } catch (err) {
+    console.error("[blockchainController.getRequests]", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch on-chain requests" });
   }
 };
 
@@ -278,17 +341,16 @@ const handleRevokeAccess = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const handleCheckAccess = async (req, res) => {
   try {
-    const { fileId, researcherAddress } = req.params;
-    if (!fileId || !researcherAddress) {
-      return res.status(400).json({ success: false, message: "fileId and researcherAddress are required" });
+    const { fileId, researcherOrcid } = req.params;
+    if (!fileId || !researcherOrcid) {
+      return res.status(400).json({ success: false, message: "fileId and researcherOrcid are required" });
     }
-    const result = await checkAccess(Number(fileId), researcherAddress);
+    const result = await checkAccess(Number(fileId), decodeURIComponent(researcherOrcid));
     return res.status(200).json({
-      success:     true,
-      fileId:      Number(fileId),
-      researcher:  researcherAddress,
-      hasAccess:   result.hasAccess,
-      expiresAt:   result.expiresAt || null,
+      success:    true,
+      fileId:     Number(fileId),
+      hasAccess:  result.hasAccess,
+      expiresAt:  result.expiresAt || null,
     });
   } catch (err) {
     console.error("[blockchainController.checkAccess]", err);
@@ -306,6 +368,8 @@ module.exports = {
   storeHash,
   handleRequestAccess,
   handleApproveAccess,
+  handleRejectAccess,
   handleRevokeAccess,
   handleCheckAccess,
+  handleGetRequests,
 };
