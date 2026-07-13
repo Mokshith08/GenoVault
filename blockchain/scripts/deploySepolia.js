@@ -46,8 +46,10 @@ async function main() {
   console.log("⏳  Deploying GenomicDataRegistry to Sepolia...");
   console.log("    (This takes ~15-30 seconds on the public network)\n");
 
+  // Pass the deployer address as systemWallet — this is the only address
+  // allowed to sign blockchain transactions (onlySystem modifier).
   const Factory  = await ethers.getContractFactory("GenomicDataRegistry");
-  const contract = await Factory.deploy();
+  const contract = await Factory.deploy(deployer.address);
   await contract.waitForDeployment();
 
   const contractAddress = await contract.getAddress();
