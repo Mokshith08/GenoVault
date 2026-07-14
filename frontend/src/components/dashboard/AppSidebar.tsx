@@ -12,6 +12,7 @@ import { Logo } from "@/components/Logo";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 
+// Owner sidebar items only — researchers use ResearcherSidebar
 const ownerItems = [
   { title: "Overview",      url: "/dashboard",              icon: LayoutDashboard },
   { title: "Files",         url: "/dashboard/upload",       icon: UploadCloud },
@@ -19,14 +20,6 @@ const ownerItems = [
   { title: "Access Control",url: "/dashboard/access",       icon: ShieldCheck },
   { title: "Verification",  url: "/dashboard/verification", icon: FileSearch },
   { title: "Audit Trail",   url: "/dashboard/audit",        icon: ScrollText },
-];
-
-const researcherItems = [
-  { title: "Overview",     url: "/dashboard",              icon: LayoutDashboard },
-  { title: "Datasets",     url: "/dashboard/requests",     icon: Inbox },
-  { title: "My Access",    url: "/dashboard/access",       icon: ShieldCheck },
-  { title: "Verification", url: "/dashboard/verification", icon: FileSearch },
-  { title: "Audit Trail",  url: "/dashboard/audit",        icon: ScrollText },
 ];
 
 /* ── Pending count badge ──────────────────────────────────────────────────── */
@@ -63,8 +56,8 @@ export const AppSidebar = () => {
   const { user, token, logout } = useAuth();
   const navigate = useNavigate();
 
-  const isOwner = user?.role === "owner";
-  const items = isOwner ? ownerItems : researcherItems;
+  const isOwner = true; // AppSidebar is only mounted inside DashboardLayout (owner)
+  const items = ownerItems;
 
   /* ── Pending request count (owner only) ──────────────────────── */
   const [pendingCount, setPendingCount] = useState(0);
