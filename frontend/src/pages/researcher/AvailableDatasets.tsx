@@ -5,7 +5,7 @@ import {
   Calendar, HardDrive, CheckCircle2, Clock,
   AlertTriangle, SlidersHorizontal, X, Globe,
   Activity, Dna as DnaIcon, FlaskConical, Hash,
-  ChevronRight, Info,
+  ChevronRight, Info, LockKeyhole,
 } from "lucide-react";
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -178,18 +178,18 @@ function HoverPanel({ ds }: { ds: Dataset }) {
 
 // ── Dataset Card ──────────────────────────────────────────────────────────────
 function DatasetCard({
-  ds, index, onRequestAccess, requested, requesting,
+  ds, index, onRequestAccess, fileStatus, requesting,
 }: {
   ds:             Dataset;
   index:          number;
   onRequestAccess:(ds: Dataset) => void;
-  requested:      Set<string>;
+  fileStatus:     string;   // "none" | "pending" | "approved" | "expired"
   requesting:     string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const hoverTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ext    = EXT_COLORS[ds.extension] ?? EXT_COLORS[".fastq"];
-  const isReq  = requested.has(ds._id);
+  const isReq    = fileStatus === "pending";
   const isReqing = requesting === ds._id;
 
   const handleMouseEnter = () => {
@@ -296,12 +296,14 @@ function DatasetCard({
           disabled={isReq || isReqing}
           className={`w-full flex items-center justify-center gap-1.5 text-xs font-semibold rounded-lg py-2 transition-all
             ${isReq
-              ? "bg-emerald-500/10 text-emerald-400 cursor-default"
+              ? "bg-amber-500/10 text-amber-400 cursor-default"
               : "bg-primary/10 text-primary hover:bg-primary/20 active:scale-[0.98]"
             } ${isReqing ? "opacity-60 cursor-wait" : ""}`}
         >
-          {isReq ? (
-            <><CheckCircle2 className="h-3.5 w-3.5" /> Requested</>
+          {isReqing ? (
+            <><Clock className="h-3.5 w-3.5 animate-spin" /> Submitting…</>
+          ) : isReq ? (
+            <><Clock className="h-3.5 w-3.5" /> Pending Approval…</>
           ) : (
             <>Request Access <ChevronRight className="h-3.5 w-3.5" /></>
           )}
@@ -327,7 +329,8 @@ function DatasetCard({
 export default function AvailableDatasets() {
   const { token } = useAuth();
   const [datasets,   setDatasets]   = useState<Dataset[]>([]);
-  const [requested,  setRequested]  = useState<Set<string>>(new Set());
+  // Map fileId -> "none" | "pending" | "approved" | "expired"
+  const [statusMap,  setStatusMap]  = useState<Record<string, string>>({});
   const [requesting, setRequesting] = useState<string | null>(null);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -335,6 +338,36 @@ export default function AvailableDatasets() {
   const [search,     setSearch]     = useState("");
   const [extFilter,  setExtFilter]  = useState("all");
   const [showFilter, setShowFilter] = useState(false);
+
+  /* ── Fetch my existing requests and build statusMap ─────────────── */
+  const fetchMyRequests = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res  = await fetch("http://localhost:5000/api/access/my-requests", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) return;
+      const map: Record<string, string> = {};
+      for (const r of (data.requests ?? [])) {
+        const fileId = r.file?._id;
+        if (!fileId) continue;
+        const isApprovedActive =
+          r.status === "approved" &&
+          r.accessExpiresAt &&
+          new Date(r.accessExpiresAt).getTime() > Date.now();
+        if (isApprovedActive) {
+          map[fileId] = "approved";
+        } else if (r.status === "pending") {
+          map[fileId] = "pending";
+        } else {
+          // denied / rejected / revoked / expired → can re-request
+          map[fileId] = "none";
+        }
+      }
+      setStatusMap(map);
+    } catch { /* silently ignore */ }
+  }, [token]);
 
   const fetchDatasets = useCallback(async (silent = false) => {
     if (!token) return;
@@ -354,13 +387,18 @@ export default function AvailableDatasets() {
     }
   }, [token]);
 
-  useEffect(() => { fetchDatasets(); }, [fetchDatasets]);
+  useEffect(() => { fetchDatasets(); fetchMyRequests(); }, [fetchDatasets, fetchMyRequests]);
   useEffect(() => {
-    const id = setInterval(() => fetchDatasets(true), 15_000);
-    return () => clearInterval(id);
-  }, [fetchDatasets]);
+    // Refresh datasets every 15s, refresh request statuses every 20s
+    const dsId  = setInterval(() => fetchDatasets(true), 15_000);
+    const reqId = setInterval(() => fetchMyRequests(),   20_000);
+    return () => { clearInterval(dsId); clearInterval(reqId); };
+  }, [fetchDatasets, fetchMyRequests]);
 
-  const filtered = datasets.filter(d => {
+  /* ── Filter: hide approved+active datasets ───────────────────── */
+  const visibleDatasets = datasets.filter(d => statusMap[d._id] !== "approved");
+
+  const filtered = visibleDatasets.filter(d => {
     const q = search.toLowerCase();
     const matchSearch = !q
       || d.originalName.toLowerCase().includes(q)
@@ -382,7 +420,8 @@ export default function AvailableDatasets() {
       });
       const data = await res.json();
       if (!res.ok && res.status !== 409) throw new Error(data.message || "Request failed");
-      setRequested(prev => new Set(prev).add(ds._id));
+      // Mark as pending in statusMap
+      setStatusMap(prev => ({ ...prev, [ds._id]: "pending" }));
       toast.success(`Access requested for ${ds.datasetId ?? ds.originalName}`);
     } catch (e: any) {
       toast.error(e.message || "Failed to submit request");
@@ -399,8 +438,8 @@ export default function AvailableDatasets() {
           <h2 className="text-2xl font-bold tracking-tight">Available Datasets</h2>
           <p className="text-muted-foreground text-sm mt-1">
             Browse anonymized genomic datasets.
-            {datasets.length > 0 && (
-              <span className="ml-1 text-primary font-medium">{datasets.length} available</span>
+            {visibleDatasets.length > 0 && (
+              <span className="ml-1 text-primary font-medium">{visibleDatasets.length} available</span>
             )}
           </p>
         </div>
@@ -487,6 +526,13 @@ export default function AvailableDatasets() {
               <h3 className="text-lg font-semibold mb-1">No Datasets Available</h3>
               <p className="text-sm text-muted-foreground">Datasets uploaded by owners will appear here.</p>
             </>
+          ) : visibleDatasets.length === 0 ? (
+            <>
+              <h3 className="text-lg font-semibold mb-1">All datasets are currently accessed</h3>
+              <p className="text-sm text-muted-foreground max-w-xs">
+                You have active access to all available datasets. They will reappear here once your access expires or is revoked.
+              </p>
+            </>
           ) : (
             <>
               <h3 className="text-lg font-semibold mb-1">No Results</h3>
@@ -504,7 +550,7 @@ export default function AvailableDatasets() {
             <DatasetCard
               key={ds._id} ds={ds} index={i}
               onRequestAccess={handleRequestAccess}
-              requested={requested}
+              fileStatus={statusMap[ds._id] ?? "none"}
               requesting={requesting}
             />
           ))}
