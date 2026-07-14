@@ -144,10 +144,14 @@ const AccessControl = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to load grants");
-      // Only show approved (or recently revoked) grants
-      const relevant = (data.requests ?? []).filter(
-        (r: Grant) => r.status === "approved" || r.status === "revoked"
-      );
+      // Only show approved grants that still have time remaining OR recently revoked ones
+      const relevant = (data.requests ?? []).filter((r: Grant) => {
+        if (r.status === "revoked") return true;
+        if (r.status !== "approved") return false;
+        // Hide expired approved grants
+        if (r.accessExpiresAt && new Date(r.accessExpiresAt).getTime() <= Date.now()) return false;
+        return true;
+      });
       setGrants(relevant);
     } catch (e: any) {
       setError(e.message || "Network error");
@@ -310,15 +314,18 @@ const AccessControl = () => {
                   )}
 
                   <div className="mt-4 pt-4 border-t border-border flex justify-end">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => openRevoke(g._id)}
-                      disabled={!isActive}
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                    >
-                      <Ban className="h-4 w-4 mr-1.5" />Revoke
-                    </Button>
+                    {isActive ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openRevoke(g._id)}
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      >
+                        <Ban className="h-4 w-4 mr-1.5" />Revoke
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">Access expired — no action needed</span>
+                    )}
                   </div>
                 </Card>
               </motion.div>
