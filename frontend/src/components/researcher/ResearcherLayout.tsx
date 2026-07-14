@@ -44,6 +44,8 @@ export const ResearcherLayout = () => {
   }, [token]);
 
   if (!user) return <Navigate to="/login" replace />;
+  // Owners have their own layout — redirect them away from the researcher dashboard
+  if (user.role === "owner") return <Navigate to="/dashboard" replace />;
 
   return (
     <SidebarProvider>
