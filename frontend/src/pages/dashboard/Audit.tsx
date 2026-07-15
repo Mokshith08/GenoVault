@@ -1,43 +1,45 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
-  Search, Download, UploadCloud, Inbox, ShieldCheck, KeyRound,
+  Search, FileDown, UploadCloud, Inbox, ShieldCheck, KeyRound,
   Ban, FileCheck2, RefreshCw, ExternalLink, Loader2, AlertTriangle,
   XCircle, CheckCircle2,
 } from "lucide-react";
-import { PageHeader } from "@/components/dashboard/PageHeader";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { PageHeader }   from "@/components/dashboard/PageHeader";
+import { Card }         from "@/components/ui/card";
+import { Input }        from "@/components/ui/input";
+import { Button }       from "@/components/ui/button";
+import { Badge }        from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth }      from "@/contexts/AuthContext";
+import jsPDF            from "jspdf";
+import autoTable        from "jspdf-autotable";
 
 interface AuditEvent {
-  eventType: string;
-  action: string;
-  fileId?: number | null;
-  fileName: string;
-  actor: string;
-  txHash?: string | null;
+  eventType:   string;
+  action:      string;
+  fileId?:     number | null;
+  fileName:    string;
+  actor:       string;
+  txHash?:     string | null;
   blockNumber?: number | null;
   etherscanUrl?: string | null;
-  timestamp?: string;
-  gasUsed?: string | null;
+  timestamp?:  string;
+  gasUsed?:    string | null;
 }
 
 const actionMeta: Record<string, { icon: React.ElementType; color: string }> = {
-  Upload:   { icon: UploadCloud,  color: "bg-blue-500/20 text-blue-400"     },
-  Request:  { icon: Inbox,        color: "bg-amber-500/20 text-amber-400"   },
+  Upload:   { icon: UploadCloud,  color: "bg-blue-500/20 text-blue-400"      },
+  Request:  { icon: Inbox,        color: "bg-amber-500/20 text-amber-400"    },
   Approve:  { icon: ShieldCheck,  color: "bg-emerald-500/20 text-emerald-400" },
-  Reject:   { icon: XCircle,      color: "bg-red-500/20 text-red-400"       },
-  Revoke:   { icon: Ban,          color: "bg-zinc-500/20 text-zinc-400"     },
-  Verify:   { icon: FileCheck2,   color: "bg-violet-500/20 text-violet-400" },
-  Access:   { icon: KeyRound,     color: "bg-primary/20 text-primary"       },
+  Reject:   { icon: XCircle,      color: "bg-red-500/20 text-red-400"        },
+  Revoke:   { icon: Ban,          color: "bg-zinc-500/20 text-zinc-400"      },
+  Verify:   { icon: FileCheck2,   color: "bg-violet-500/20 text-violet-400"  },
+  Access:   { icon: KeyRound,     color: "bg-primary/20 text-primary"        },
   Approved: { icon: CheckCircle2, color: "bg-emerald-500/20 text-emerald-400" },
-  Rejected: { icon: XCircle,      color: "bg-red-500/20 text-red-400"       },
-  Revoked:  { icon: Ban,          color: "bg-zinc-500/20 text-zinc-400"     },
+  Rejected: { icon: XCircle,      color: "bg-red-500/20 text-red-400"        },
+  Revoked:  { icon: Ban,          color: "bg-zinc-500/20 text-zinc-400"      },
 };
 
 function formatDate(iso?: string) {
@@ -67,13 +69,13 @@ function TxBadge({ txHash, etherscanUrl }: { txHash?: string | null; etherscanUr
 }
 
 const Audit = () => {
-  const { token } = useAuth();
-  const [events,    setEvents]    = useState<AuditEvent[]>([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState<string | null>(null);
-  const [refreshing,setRefreshing]= useState(false);
-  const [q,         setQ]         = useState("");
-  const [action,    setAction]    = useState<string>("all");
+  const { token, user } = useAuth();
+  const [events,     setEvents]     = useState<AuditEvent[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [q,          setQ]          = useState("");
+  const [action,     setAction]     = useState<string>("all");
 
   const fetchAudit = useCallback(async (silent = false) => {
     if (!token) return;
@@ -109,27 +111,103 @@ const Audit = () => {
 
   const uniqueActions = useMemo(() => [...new Set(events.map(e => e.action))], [events]);
 
-  // CSV export
-  const exportCSV = () => {
-    const header = "Time,Action,File,Actor,TxHash,Block,GasUsed";
-    const csvRows = rows.map(r =>
-      [
+  // ── PDF Export ────────────────────────────────────────────────────────────
+  const exportPDF = () => {
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+
+    // Header banner
+    doc.setFillColor(30, 30, 46);
+    doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+
+    // Logo text
+    doc.setTextColor(139, 92, 246);   // violet-500
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("GenoVault", 36, 30);
+
+    doc.setTextColor(200, 200, 220);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.text("Secure Genomics Platform", 36, 44);
+
+    // Title block
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("Blockchain Audit Trail", 36, 80);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(160, 160, 180);
+    doc.text(
+      `Exported by: ${user?.name ?? "Unknown"}  |  Role: ${user?.role ?? "—"}  |  Date: ${new Date().toLocaleString("en-IN")}`,
+      36, 96
+    );
+    doc.text(
+      `Network: Ethereum Sepolia Testnet  |  Total events: ${rows.length}`,
+      36, 110
+    );
+
+    // Table
+    autoTable(doc, {
+      startY: 126,
+      head: [["Time", "Action", "File", "Actor", "Tx Hash", "Block", "Gas Used"]],
+      body: rows.map(r => [
         formatDate(r.timestamp),
         r.action,
         r.fileName,
         r.actor,
-        r.txHash ?? "",
-        r.blockNumber ?? "",
-        r.gasUsed ?? "",
-      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")
-    );
-    const blob = new Blob([[header, ...csvRows].join("\n")], { type: "text/csv" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `genomic-audit-${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+        r.txHash ?? "Off-chain",
+        r.blockNumber != null ? String(r.blockNumber) : "—",
+        r.gasUsed ?? "—",
+      ]),
+      styles: {
+        fontSize: 8,
+        cellPadding: 5,
+        overflow: "linebreak",
+        textColor: [220, 220, 235],
+        fillColor: [22, 22, 35],
+        lineColor: [50, 50, 70],
+        lineWidth: 0.5,
+      },
+      headStyles: {
+        fillColor: [50, 30, 90],
+        textColor: [200, 180, 255],
+        fontStyle: "bold",
+        fontSize: 8.5,
+      },
+      alternateRowStyles: {
+        fillColor: [28, 28, 44],
+      },
+      columnStyles: {
+        0: { cellWidth: 95  },   // Time
+        1: { cellWidth: 65  },   // Action
+        2: { cellWidth: 190 },   // File
+        3: { cellWidth: 80  },   // Actor
+        4: { cellWidth: 130 },   // Tx Hash
+        5: { cellWidth: 55  },   // Block
+        6: { cellWidth: 60  },   // Gas
+      },
+      didDrawPage: (hookData) => {
+        // Footer on every page
+        const pageW = doc.internal.pageSize.getWidth();
+        const pageH = doc.internal.pageSize.getHeight();
+        doc.setFillColor(30, 30, 46);
+        doc.rect(0, pageH - 24, pageW, 24, "F");
+        doc.setFontSize(7.5);
+        doc.setTextColor(120, 120, 140);
+        doc.text(
+          "This document is an official GenoVault audit export. All blockchain events are tamper-proof and recorded on Ethereum Sepolia Testnet.",
+          36, pageH - 10
+        );
+        doc.text(
+          `Page ${hookData.pageNumber}`,
+          pageW - 50, pageH - 10
+        );
+      },
+    });
+
+    doc.save(`genovault-audit-${Date.now()}.pdf`);
   };
 
   return (
@@ -143,8 +221,8 @@ const Audit = () => {
               <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
-            <Button variant="outline" size="sm" onClick={exportCSV} disabled={loading || rows.length === 0}>
-              <Download className="h-4 w-4 mr-1.5" />Export CSV
+            <Button variant="outline" size="sm" onClick={exportPDF} disabled={loading || rows.length === 0}>
+              <FileDown className="h-4 w-4 mr-1.5" />Export PDF
             </Button>
           </div>
         }
@@ -155,7 +233,11 @@ const Audit = () => {
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Search by file, actor or tx hash..." value={q} onChange={e => setQ(e.target.value)} className="pl-9" />
+            <Input
+              placeholder="Search by file, actor or tx hash..."
+              value={q} onChange={e => setQ(e.target.value)}
+              className="pl-9"
+            />
           </div>
           <Select value={action} onValueChange={setAction}>
             <SelectTrigger className="w-full sm:w-44"><SelectValue /></SelectTrigger>
