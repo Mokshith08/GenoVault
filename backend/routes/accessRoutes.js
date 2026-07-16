@@ -24,6 +24,7 @@ const {
   approveRequest,
   denyRequest,
   revokeRequest,
+  requestMoreInfo,
   verifyPin,
   downloadFile,
   getMyRequests,
@@ -56,10 +57,11 @@ router.get(
 );
 
 // ── Owner actions ────────────────────────────────────────────────
-router.post("/approve-request",    protect, requireRole("owner"), approveRequest);
-router.post("/deny-request",       protect, requireRole("owner"), denyRequest);
-router.post("/revoke-access",      protect, requireRole("owner"), revokeRequest);
-router.post("/verify-pin",         protect, requireRole("owner"), pinLimiter, verifyPin);
-router.get("/incoming-requests",   protect, requireRole("owner"), getIncomingRequests);
+router.post("/approve-request",     protect, requireRole("owner"), approveRequest);
+router.post("/deny-request",        protect, requireRole("owner"), denyRequest);
+router.post("/revoke-access",       protect, requireRole("owner"), revokeRequest);
+router.post("/request-more-info",   protect, requireRole("owner"), requestMoreInfo);
+router.post("/verify-pin",          protect, requireRole("owner"), pinLimiter, verifyPin);
+router.get("/incoming-requests",    protect, requireRole("owner"), getIncomingRequests);
 
 module.exports = router;
