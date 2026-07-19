@@ -5,13 +5,15 @@ import {
   Calendar, HardDrive, CheckCircle2, Clock,
   AlertTriangle, SlidersHorizontal, X, Globe,
   Activity, Dna as DnaIcon, FlaskConical, Hash,
-  ChevronRight, Info, LockKeyhole,
+  ChevronRight, Info, LockKeyhole, Timer,
 } from "lucide-react";
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge }  from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast }   from "sonner";
+import { RequestAccessForm } from "./RequestAccessForm";
+import { apiFetch } from "@/lib/apiFetch";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Dataset {
@@ -176,21 +178,44 @@ function HoverPanel({ ds }: { ds: Dataset }) {
   );
 }
 
+// ── Countdown hook ────────────────────────────────────────────────────────────
+function useCooldownCountdown(cooldownUntil?: string): string {
+  const [label, setLabel] = useState("");
+  useEffect(() => {
+    if (!cooldownUntil) { setLabel(""); return; }
+    const update = () => {
+      const diff = new Date(cooldownUntil).getTime() - Date.now();
+      if (diff <= 0) { setLabel(""); return; }
+      const h = Math.floor(diff / 3_600_000);
+      const m = Math.floor((diff % 3_600_000) / 60_000);
+      const s = Math.floor((diff % 60_000) / 1_000);
+      setLabel(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`);
+    };
+    update();
+    const id = setInterval(update, 1_000);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
+  return label;
+}
+
 // ── Dataset Card ──────────────────────────────────────────────────────────────
 function DatasetCard({
-  ds, index, onRequestAccess, fileStatus, requesting,
+  ds, index, onRequestAccess, fileStatus, requesting, cooldownUntil,
 }: {
   ds:             Dataset;
   index:          number;
   onRequestAccess:(ds: Dataset) => void;
-  fileStatus:     string;   // "none" | "pending" | "approved" | "expired"
+  fileStatus:     string;   // "none" | "pending" | "approved" | "cooldown"
   requesting:     string | null;
+  cooldownUntil?: string;   // ISO timestamp — only set when fileStatus==="cooldown"
 }) {
   const [hovered, setHovered] = useState(false);
   const hoverTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ext    = EXT_COLORS[ds.extension] ?? EXT_COLORS[".fastq"];
-  const isReq    = fileStatus === "pending";
-  const isReqing = requesting === ds._id;
+  const ext      = EXT_COLORS[ds.extension] ?? EXT_COLORS[".fastq"];
+  const isPending  = fileStatus === "pending";
+  const isCooldown = fileStatus === "cooldown";
+  const isReqing   = requesting === ds._id;
+  const countdown  = useCooldownCountdown(isCooldown ? cooldownUntil : undefined);
 
   const handleMouseEnter = () => {
     hoverTimer.current = setTimeout(() => setHovered(true), 180);
@@ -203,6 +228,19 @@ function DatasetCard({
   const availBadge = ds.availability === "Restricted"
     ? "bg-red-500/10 text-red-400"
     : "bg-emerald-500/10 text-emerald-400";
+
+  const buttonContent = () => {
+    if (isReqing)   return <><Clock className="h-3.5 w-3.5 animate-spin" /> Submitting…</>;
+    if (isPending)  return <><Clock className="h-3.5 w-3.5" /> Pending Approval…</>;
+    if (isCooldown) return <><Timer className="h-3.5 w-3.5" /> Cooldown: {countdown || "…"}</>;
+    return <>Request Access <ChevronRight className="h-3.5 w-3.5" /></>;
+  };
+
+  const buttonCls = isPending
+    ? "bg-amber-500/10 text-amber-400 cursor-default"
+    : isCooldown
+    ? "bg-zinc-500/10 text-zinc-400 cursor-not-allowed"
+    : "bg-primary/10 text-primary hover:bg-primary/20 active:scale-[0.98]";
 
   return (
     <motion.div
@@ -290,27 +328,25 @@ function DatasetCard({
           )}
         </div>
 
-        {/* ── Request button ── */}
+        {/* ── Request / Cooldown button ── */}
         <button
-          onClick={() => !isReq && onRequestAccess(ds)}
-          disabled={isReq || isReqing}
+          onClick={() => !isPending && !isCooldown && onRequestAccess(ds)}
+          disabled={isPending || isCooldown || isReqing}
           className={`w-full flex items-center justify-center gap-1.5 text-xs font-semibold rounded-lg py-2 transition-all
-            ${isReq
-              ? "bg-amber-500/10 text-amber-400 cursor-default"
-              : "bg-primary/10 text-primary hover:bg-primary/20 active:scale-[0.98]"
-            } ${isReqing ? "opacity-60 cursor-wait" : ""}`}
+            ${buttonCls} ${isReqing ? "opacity-60 cursor-wait" : ""}`}
         >
-          {isReqing ? (
-            <><Clock className="h-3.5 w-3.5 animate-spin" /> Submitting…</>
-          ) : isReq ? (
-            <><Clock className="h-3.5 w-3.5" /> Pending Approval…</>
-          ) : (
-            <>Request Access <ChevronRight className="h-3.5 w-3.5" /></>
-          )}
+          {buttonContent()}
         </button>
 
+        {/* Cooldown sub-label */}
+        {isCooldown && (
+          <p className="text-center text-[10px] text-muted-foreground/50 -mt-1">
+            You can re-request after the cooldown expires
+          </p>
+        )}
+
         {/* ── Hover hint ── */}
-        {!hovered && (
+        {!hovered && !isCooldown && (
           <p className="text-center text-[10px] text-muted-foreground/40 -mt-1">
             Hover for full details
           </p>
@@ -338,34 +374,52 @@ export default function AvailableDatasets() {
   const [search,     setSearch]     = useState("");
   const [extFilter,  setExtFilter]  = useState("all");
   const [showFilter, setShowFilter] = useState(false);
+  // Form modal
+  const [formDataset, setFormDataset] = useState<Dataset | null>(null);
+  // Cooldown map: fileId -> ISO timestamp when cooldown expires
+  const [cooldownMap, setCooldownMap] = useState<Record<string, string>>({});
 
   /* ── Fetch my existing requests and build statusMap ─────────────── */
   const fetchMyRequests = useCallback(async () => {
     if (!token) return;
     try {
-      const res  = await fetch("http://localhost:5000/api/access/my-requests", {
+      const res  = await apiFetch("/api/access/my-requests", {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) return;
-      const map: Record<string, string> = {};
+      const statusResult: Record<string, string> = {};
+      const cooldownResult: Record<string, string> = {};
+      const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
       for (const r of (data.requests ?? [])) {
         const fileId = r.file?._id;
         if (!fileId) continue;
+
         const isApprovedActive =
           r.status === "approved" &&
           r.accessExpiresAt &&
           new Date(r.accessExpiresAt).getTime() > Date.now();
+
         if (isApprovedActive) {
-          map[fileId] = "approved";
-        } else if (r.status === "pending") {
-          map[fileId] = "pending";
+          statusResult[fileId] = "approved";
+        } else if (["pending", "more-info"].includes(r.status)) {
+          statusResult[fileId] = "pending";
+        } else if (["denied", "rejected", "revoked"].includes(r.status)) {
+          // Check if still within 24h cooldown
+          const cooldownUntil = new Date(new Date(r.createdAt).getTime() + COOLDOWN_MS);
+          if (cooldownUntil.getTime() > Date.now()) {
+            statusResult[fileId]  = "cooldown";
+            cooldownResult[fileId] = cooldownUntil.toISOString();
+          } else {
+            statusResult[fileId] = "none";
+          }
         } else {
-          // denied / rejected / revoked / expired → can re-request
-          map[fileId] = "none";
+          statusResult[fileId] = "none";
         }
       }
-      setStatusMap(map);
+      setStatusMap(statusResult);
+      setCooldownMap(cooldownResult);
     } catch { /* silently ignore */ }
   }, [token]);
 
@@ -374,7 +428,7 @@ export default function AvailableDatasets() {
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {
-      const res  = await fetch("http://localhost:5000/api/files/public", {
+      const res  = await apiFetch("/api/files/public", {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -409,25 +463,15 @@ export default function AvailableDatasets() {
     return matchSearch && (extFilter === "all" || d.extension === extFilter);
   });
 
-  const handleRequestAccess = async (ds: Dataset) => {
-    if (requesting) return;
-    setRequesting(ds._id);
-    try {
-      const res  = await fetch("http://localhost:5000/api/access/request-access", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body:    JSON.stringify({ fileId: ds._id }),
-      });
-      const data = await res.json();
-      if (!res.ok && res.status !== 409) throw new Error(data.message || "Request failed");
-      // Mark as pending in statusMap
-      setStatusMap(prev => ({ ...prev, [ds._id]: "pending" }));
-      toast.success(`Access requested for ${ds.datasetId ?? ds.originalName}`);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to submit request");
-    } finally {
-      setRequesting(null);
-    }
+  // Open the form drawer instead of directly submitting
+  const handleRequestAccess = (ds: Dataset) => {
+    setFormDataset(ds);
+  };
+
+  // Called by RequestAccessForm on successful submit
+  const handleFormSuccess = (datasetId: string) => {
+    setStatusMap(prev => ({ ...prev, [datasetId]: "pending" }));
+    setFormDataset(null);
   };
 
   return (
@@ -552,9 +596,19 @@ export default function AvailableDatasets() {
               onRequestAccess={handleRequestAccess}
               fileStatus={statusMap[ds._id] ?? "none"}
               requesting={requesting}
+              cooldownUntil={cooldownMap[ds._id]}
             />
           ))}
         </div>
+      )}
+
+      {/* ── Request Access Form Modal ── */}
+      {formDataset && (
+        <RequestAccessForm
+          dataset={formDataset}
+          onClose={() => setFormDataset(null)}
+          onSuccess={handleFormSuccess}
+        />
       )}
     </div>
   );
