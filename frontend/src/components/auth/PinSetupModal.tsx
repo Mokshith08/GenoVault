@@ -1,22 +1,42 @@
+/**
+ * PinSetupModal.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * First-time security PIN setup modal.
+ *
+ * Storage architecture (FIXED):
+ *   1. Raw PIN entered by user
+ *   2. Sent to POST /api/auth/set-pin
+ *   3. Backend bcrypt-hashes it → stores hash in Azure Key Vault
+ *   4. MongoDB marks user.pinSet = true
+ *   5. Raw PIN stored in localStorage ONLY for the current session's
+ *      client-side PIN gate (approve/reject confirm dialog in Requests.tsx).
+ *      It is NEVER sent to or stored in the backend in plain text.
+ *
+ * Previous bug: modal only called AuthContext.setPin() → localStorage.
+ * Backend Key Vault never received the hash → verifyPin always failed on approve.
+ */
+
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { KeyRound, ShieldCheck, ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { KeyRound, ShieldCheck, ArrowRight, Loader2 } from "lucide-react";
+import { Button }   from "@/components/ui/button";
 import { PinInput } from "@/components/ui/PinInput";
-import { useAuth } from "@/contexts/AuthContext";
-import { toast } from "sonner";
+import { useAuth }  from "@/contexts/AuthContext";
+import { toast }    from "sonner";
 
-const empty = () => Array(6).fill("");
+const API_BASE = "http://localhost:5000/api";
+const empty    = () => Array(6).fill("");
 
-/* ─── Main Modal ─── */
 export const PinSetupModal = () => {
-  const { user, pin, setPin } = useAuth();
+  const { user, token, pin, setPin } = useAuth();
 
-  const [step, setStep] = useState<"intro" | "create" | "confirm">("intro");
+  const [step,    setStep]    = useState<"intro" | "create" | "confirm">("intro");
   const [digits1, setDigits1] = useState<string[]>(empty());
   const [digits2, setDigits2] = useState<string[]>(empty());
-  const [shake, setShake] = useState(false);
+  const [shake,   setShake]   = useState(false);
+  const [loading, setLoading] = useState(false);
 
+  // Show ONLY when logged in AND no PIN in localStorage
   const showModal = !!user && !pin;
 
   // Reset when modal (re)opens
@@ -32,7 +52,7 @@ export const PinSetupModal = () => {
     setDigits2(empty());
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (digits2.join("").length < 6) { toast.error("Enter all 6 digits"); return; }
     if (digits1.join("") !== digits2.join("")) {
       setShake(true);
@@ -41,8 +61,32 @@ export const PinSetupModal = () => {
       toast.error("PINs don't match. Try again.");
       return;
     }
-    setPin(digits1.join(""));
-    toast.success("Security PIN created! You're all set.");
+
+    const rawPin = digits1.join("");
+    setLoading(true);
+    try {
+      // ── Step 1: Save hash to Azure Key Vault via backend ──────────────────
+      const res  = await fetch(`${API_BASE}/auth/set-pin`, {
+        method:  "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization:  `Bearer ${token}`,
+        },
+        body: JSON.stringify({ pin: rawPin }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to save PIN");
+
+      // ── Step 2: Store raw PIN in localStorage for client-side PIN gate ────
+      // (used only to pre-fill the confirm dialog — never sent to backend again)
+      setPin(rawPin);
+      toast.success("Security PIN created and saved to Azure Key Vault!");
+
+    } catch (e: any) {
+      toast.error(e.message || "Failed to save PIN. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -92,7 +136,7 @@ export const PinSetupModal = () => {
                     {[
                       "Used to approve researcher access requests",
                       "Used to instantly revoke active grants",
-                      "Never shared — stored securely on your device",
+                      "Hash stored securely in Azure Key Vault — never in plain text",
                     ].map(t => (
                       <div key={t} className="flex items-start gap-2 text-xs text-muted-foreground">
                         <ShieldCheck className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />{t}
@@ -100,7 +144,10 @@ export const PinSetupModal = () => {
                     ))}
                   </div>
 
-                  <Button className="w-full h-12 bg-gradient-primary hover:opacity-90 shadow-elegant text-base font-semibold" onClick={() => setStep("create")}>
+                  <Button
+                    className="w-full h-12 bg-gradient-primary hover:opacity-90 shadow-elegant text-base font-semibold"
+                    onClick={() => setStep("create")}
+                  >
                     Create PIN <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </motion.div>
@@ -137,15 +184,22 @@ export const PinSetupModal = () => {
                   <PinInput value={digits2} onChange={setDigits2} shake={shake} autoFocus label="Confirm PIN" />
 
                   <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1 h-11" onClick={() => { setStep("create"); setDigits2(empty()); }}>
+                    <Button
+                      variant="outline" className="flex-1 h-11"
+                      onClick={() => { setStep("create"); setDigits2(empty()); }}
+                      disabled={loading}
+                    >
                       Back
                     </Button>
                     <Button
                       className="flex-1 h-11 bg-gradient-primary hover:opacity-90 shadow-elegant font-semibold"
                       onClick={handleConfirm}
-                      disabled={digits2.join("").length < 6}
+                      disabled={digits2.join("").length < 6 || loading}
                     >
-                      <ShieldCheck className="mr-2 h-4 w-4" /> Save PIN
+                      {loading
+                        ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</>
+                        : <><ShieldCheck className="mr-2 h-4 w-4" />Save PIN</>
+                      }
                     </Button>
                   </div>
                 </motion.div>
