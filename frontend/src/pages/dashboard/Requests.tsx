@@ -1,110 +1,101 @@
+/**
+ * Requests.tsx  (Owner Dashboard)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Displays incoming research access requests with:
+ *  • Collapsed card: researcher, institution, project, access type, status
+ *  • Expanded section (hover desktop / tap mobile): full details + action buttons
+ *  • Smooth height + fade animation via Framer Motion
+ *  • PIN-gated approve / reject flow preserved
+ *  • "Request More Info" inline note flow
+ */
+
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Check, X, Database, FlaskConical, ShieldCheck, KeyRound,
-  AlertTriangle, Loader2, RefreshCw, Dna, HardDrive, Calendar,
-  User, Shield, CheckCircle2, Clock, Search, ExternalLink,
-  RotateCcw,
+  Check, X, ShieldCheck, KeyRound,
+  AlertTriangle, Loader2, RefreshCw, Calendar,
+  User, Shield, Clock, Search, ExternalLink,
+  RotateCcw, ChevronDown, Building2, Mail,
+  Lock, Download, Users, FileText, MessageSquare,
+  CheckCircle2, Info, Dna, Send,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast }      from "sonner";
 import { PageHeader } from "@/components/dashboard/PageHeader";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { PinInput } from "@/components/ui/PinInput";
-import { useAuth } from "@/contexts/AuthContext";
+import { Button }     from "@/components/ui/button";
+import { Badge }      from "@/components/ui/badge";
+import { Input }      from "@/components/ui/input";
+import { PinInput }   from "@/components/ui/PinInput";
+import { useAuth }    from "@/contexts/AuthContext";
 
-// ── Dataset type from public API ─────────────────────────────────────────────
-interface Dataset {
-  _id: string;
-  originalName: string;
-  extension: ".fastq" | ".bam" | ".vcf";
-  sizeBytes: number;
-  description?: string;
-  isEncrypted: boolean;
-  ipfsStatus: "pending" | "uploading" | "done" | "failed";
-  ipfsCid?: string;
-  createdAt: string;
-  owner: { name: string; email: string };
-  blockchainFileId?: number;
-}
-
-// ── Incoming request type from /api/access/incoming-requests ─────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 interface IncomingRequest {
-  _id: string;
-  file: { _id: string; originalName: string; extension: string; blockchainFileId?: number };
-  researcher: { _id: string; name: string; email: string; orcid?: string };
-  reason?: string;
-  status: "pending" | "approved" | "denied" | "rejected" | "revoked";
-  createdAt: string;
+  _id:         string;
+  file:        { _id: string; originalName: string; extension?: string };
+  researcher:  { _id: string; name: string; email: string; orcid?: string };
+  reason?:     string;
+  // Structured fields
+  projectTitle?:               string;
+  purpose?:                    string;
+  accessType?:                 "read-only" | "downloadable";
+  extensionRequested?:         boolean;
+  dataSharedWithCollaborators?:boolean;
+  institution?:                string;
+  contactEmail?:               string;
+  benefits?:                   string;
+  risks?:                      string;
+  ownerNote?:                  string;
+  status:      "pending" | "approved" | "denied" | "rejected" | "revoked" | "more-info";
+  createdAt:   string;
   approvedAt?: string;
   accessExpiresAt?: string;
   // Blockchain receipt fields
-  approveTxHash?: string;
-  rejectTxHash?: string;
-  revokeTxHash?: string;
+  approveTxHash?:    string;
+  rejectTxHash?:     string;
+  revokeTxHash?:     string;
   approveEtherscanUrl?: string;
-  rejectEtherscanUrl?: string;
-  revokeEtherscanUrl?: string;
+  rejectEtherscanUrl?:  string;
+  revokeEtherscanUrl?:  string;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function formatSize(bytes: number) {
-  if (bytes < 1024)       return `${bytes} B`;
-  if (bytes < 1048576)    return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
-  return `${(bytes / 1073741824).toFixed(2)} GB`;
-}
-
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-IN", {
     day: "2-digit", month: "short", year: "numeric",
   });
 }
-
-const EXT_COLORS: Record<string, { bg: string; text: string; badge: string }> = {
-  ".fastq": { bg: "bg-violet-500/15", text: "text-violet-400",  badge: "FASTQ" },
-  ".bam":   { bg: "bg-cyan-500/15",   text: "text-cyan-400",    badge: "BAM"   },
-  ".vcf":   { bg: "bg-emerald-500/15",text: "text-emerald-400", badge: "VCF"   },
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  pending:  "bg-amber-500/20 text-amber-400",
-  approved: "bg-emerald-500/20 text-emerald-400",
-  denied:   "bg-red-500/20 text-red-400",
-  rejected: "bg-red-500/20 text-red-400",
-  revoked:  "bg-zinc-500/20 text-zinc-400",
-};
-
-function IpfsPill({ status }: { status: Dataset["ipfsStatus"] }) {
-  const map = {
-    done:      { icon: <CheckCircle2 className="h-3 w-3" />, label: "IPFS Backed Up", cls: "bg-emerald-500/15 text-emerald-400" },
-    uploading: { icon: <Clock className="h-3 w-3 animate-spin" />, label: "Backing Up…",  cls: "bg-amber-500/15 text-amber-400"   },
-    pending:   { icon: <Clock className="h-3 w-3" />,          label: "IPFS Pending",  cls: "bg-muted-foreground/20 text-muted-foreground" },
-    failed:    { icon: <AlertTriangle className="h-3 w-3" />,  label: "IPFS Failed",   cls: "bg-red-500/15 text-red-400"          },
-  };
-  const { icon, label, cls } = map[status] ?? map.pending;
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {icon} {label}
-    </span>
-  );
+function formatDateTime(iso: string) {
+  return new Date(iso).toLocaleString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
 }
 
-/* ─────────────── PIN Step ─────────────── */
+const STATUS_META: Record<string, { cls: string; label: string; dot: string }> = {
+  pending:   { cls: "bg-amber-500/15  text-amber-400",   label: "Pending",    dot: "bg-amber-400"   },
+  approved:  { cls: "bg-emerald-500/15 text-emerald-400", label: "Approved",   dot: "bg-emerald-400" },
+  denied:    { cls: "bg-red-500/15    text-red-400",      label: "Denied",     dot: "bg-red-400"     },
+  rejected:  { cls: "bg-red-500/15    text-red-400",      label: "Rejected",   dot: "bg-red-400"     },
+  revoked:   { cls: "bg-zinc-500/15   text-zinc-400",     label: "Revoked",    dot: "bg-zinc-400"    },
+  "more-info":{ cls: "bg-blue-500/15  text-blue-400",    label: "More Info",  dot: "bg-blue-400"    },
+};
+
+const ACCESS_META: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
+  "read-only":    { icon: <Lock     className="h-3 w-3" />, label: "Read Only",    cls: "bg-blue-500/15   text-blue-400"   },
+  "downloadable": { icon: <Download className="h-3 w-3" />, label: "Downloadable", cls: "bg-purple-500/15 text-purple-400" },
+};
+
+// ── PIN step ───────────────────────────────────────────────────────────────────
 interface PinStepProps {
-  action: "approve" | "reject";
+  action:     "approve" | "reject";
   researcher: string;
-  onSuccess: () => void;
-  onCancel: () => void;
-  isLoading: boolean;
+  onSuccess:  () => void;
+  onCancel:   () => void;
+  isLoading:  boolean;
 }
-
 const PinStep = ({ action, researcher, onSuccess, onCancel, isLoading }: PinStepProps) => {
   const { pin } = useAuth();
   const [digits, setDigits] = useState<string[]>(Array(6).fill(""));
-  const [shake, setShake] = useState(false);
+  const [shake,  setShake]  = useState(false);
   const isApprove = action === "approve";
 
   const handleSubmit = () => {
@@ -123,7 +114,8 @@ const PinStep = ({ action, researcher, onSuccess, onCancel, isLoading }: PinStep
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <div className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0 ${isApprove ? "bg-primary/20" : "bg-destructive/20"}`}>
+        <div className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0
+                        ${isApprove ? "bg-primary/20" : "bg-destructive/20"}`}>
           <KeyRound className={`h-5 w-5 ${isApprove ? "text-primary" : "text-destructive"}`} />
         </div>
         <div>
@@ -149,7 +141,7 @@ const PinStep = ({ action, researcher, onSuccess, onCancel, isLoading }: PinStep
   );
 };
 
-/* ─────────────── Inline Modal ─────────────── */
+// ── Modal ──────────────────────────────────────────────────────────────────────
 const Modal = ({ children, onClose }: { children: React.ReactNode; onClose: () => void }) => (
   <motion.div
     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -169,66 +161,379 @@ const Modal = ({ children, onClose }: { children: React.ReactNode; onClose: () =
   </motion.div>
 );
 
+// ── Info row ──────────────────────────────────────────────────────────────────
+function InfoRow({ icon, label, value, highlight }: {
+  icon:      React.ReactNode;
+  label:     string;
+  value:     React.ReactNode;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="h-7 w-7 rounded-lg bg-muted flex items-center justify-center shrink-0 mt-0.5">
+        <span className="text-muted-foreground">{icon}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">{label}</p>
+        <p className={`text-sm font-medium mt-0.5 ${highlight ? "text-amber-400" : "text-foreground"}`}>
+          {value || "—"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Expandable Request Card ────────────────────────────────────────────────────
+function RequestCard({
+  req,
+  onApprove, onReject, onRevoke, onMoreInfo,
+}: {
+  req:        IncomingRequest;
+  onApprove:  (r: IncomingRequest) => void;
+  onReject:   (r: IncomingRequest) => void;
+  onRevoke:   (r: IncomingRequest) => void;
+  onMoreInfo: (r: IncomingRequest, note: string) => void;
+}) {
+  const [expanded,  setExpanded]  = useState(false);
+  const [noteOpen,  setNoteOpen]  = useState(false);
+  const [note,      setNote]      = useState("");
+
+  const status     = STATUS_META[req.status] ?? STATUS_META.pending;
+  const accessMeta = ACCESS_META[req.accessType ?? "read-only"] ?? ACCESS_META["read-only"];
+
+  const isExpired  = req.accessExpiresAt
+    ? new Date(req.accessExpiresAt).getTime() <= Date.now()
+    : false;
+
+  const canRevoke  = req.status === "approved" && !isExpired;
+  const canAct     = req.status === "pending";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      layout
+      className={`rounded-2xl border overflow-hidden transition-all duration-300
+                  ${expanded
+                    ? "border-primary/40 shadow-xl shadow-primary/8"
+                    : "border-border hover:border-primary/30 hover:shadow-md"}`}
+    >
+      {/* ── Status accent bar top ── */}
+      <div className={`h-0.5 w-full ${
+        req.status === "approved" ? "bg-emerald-500" :
+        req.status === "pending"  ? "bg-amber-500"   :
+        req.status === "more-info"? "bg-blue-500"    :
+        "bg-zinc-600"
+      }`} />
+
+      {/* ── Collapsed row (always visible) ── */}
+      <div
+        className="p-5 cursor-pointer select-none"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div className="flex items-start gap-4">
+
+          {/* Avatar */}
+          <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-primary/20 to-purple-500/20
+                          border border-primary/20 flex items-center justify-center shrink-0 text-primary font-bold text-sm">
+            {req.researcher.name.slice(0, 2).toUpperCase()}
+          </div>
+
+          {/* Main info */}
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-0.5">
+              <h3 className="font-bold text-sm">{req.researcher.name}</h3>
+              {req.institution && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Building2 className="h-3 w-3" />{req.institution}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground font-medium truncate">
+              {req.projectTitle || req.reason || "No project title"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5 truncate">
+              File: <span className="font-mono text-foreground/70">{req.file.originalName}</span>
+            </p>
+          </div>
+
+          {/* Right side: badges + chevron */}
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <div className="flex items-center gap-2">
+              {/* Access type badge */}
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${accessMeta.cls}`}>
+                {accessMeta.icon}{accessMeta.label}
+              </span>
+              {/* Status badge */}
+              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${status.cls}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+                {status.label}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Calendar className="h-3 w-3" />{formatDate(req.createdAt)}
+              <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </motion.div>
+            </div>
+          </div>
+        </div>
+
+        {/* Data sharing warning — always shown if Yes */}
+        {req.dataSharedWithCollaborators && (
+          <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg
+                          bg-amber-500/10 border border-amber-500/25 text-xs text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            Data will be shared with collaborators — review before approving.
+          </div>
+        )}
+      </div>
+
+      {/* ── Expanded section ── */}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="expanded"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.4, 0, 0.2, 1] }}
+            style={{ overflow: "hidden" }}
+          >
+            <div className="border-t border-border/60 bg-muted/20 px-5 pb-5 pt-4 space-y-5">
+
+              {/* ── Detail grid ── */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <InfoRow
+                  icon={<FileText className="h-3.5 w-3.5" />}
+                  label="Purpose of Research"
+                  value={req.purpose || req.reason || "Not specified"}
+                />
+                <InfoRow
+                  icon={<Mail className="h-3.5 w-3.5" />}
+                  label="Contact Email"
+                  value={req.contactEmail || req.researcher.email}
+                />
+                <InfoRow
+                  icon={<Clock className="h-3.5 w-3.5" />}
+                  label="Access Duration"
+                  value="24 Hours (initial)"
+                />
+                <InfoRow
+                  icon={<RefreshCw className="h-3.5 w-3.5" />}
+                  label="Extension Requested"
+                  value={req.extensionRequested ? "Yes — may request later" : "No"}
+                />
+                <InfoRow
+                  icon={<Users className="h-3.5 w-3.5" />}
+                  label="Data Shared with Collaborators"
+                  value={req.dataSharedWithCollaborators ? "Yes" : "No"}
+                  highlight={!!req.dataSharedWithCollaborators}
+                />
+                {req.approvedAt && (
+                  <InfoRow
+                    icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+                    label="Approved At"
+                    value={formatDateTime(req.approvedAt)}
+                  />
+                )}
+                {req.accessExpiresAt && (
+                  <InfoRow
+                    icon={<Clock className="h-3.5 w-3.5" />}
+                    label="Access Expires"
+                    value={`${formatDateTime(req.accessExpiresAt)}${isExpired ? " (Expired)" : ""}`}
+                    highlight={isExpired}
+                  />
+                )}
+              </div>
+
+              {/* ── Benefits & Risks ── */}
+              {(req.benefits || req.risks) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {req.benefits && (
+                    <div className="p-3 rounded-xl bg-emerald-500/8 border border-emerald-500/20">
+                      <p className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider mb-1.5">
+                        Benefits
+                      </p>
+                      <p className="text-xs text-foreground/80">{req.benefits}</p>
+                    </div>
+                  )}
+                  {req.risks && (
+                    <div className="p-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
+                      <p className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider mb-1.5">
+                        Risks
+                      </p>
+                      <p className="text-xs text-foreground/80">{req.risks}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── ORCID ── */}
+              {req.researcher.orcid && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Dna className="h-3.5 w-3.5" />
+                  ORCID: <span className="font-mono text-blue-400">{req.researcher.orcid}</span>
+                </div>
+              )}
+
+              {/* ── Blockchain tx links ── */}
+              {(req.approveEtherscanUrl || req.rejectEtherscanUrl || req.revokeEtherscanUrl) && (
+                <div className="flex flex-wrap gap-3 pt-1 border-t border-border/50">
+                  {req.approveEtherscanUrl && (
+                    <a href={req.approveEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
+                      <ExternalLink className="h-3 w-3" />Approve tx
+                    </a>
+                  )}
+                  {req.rejectEtherscanUrl && (
+                    <a href={req.rejectEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-red-400 hover:underline">
+                      <ExternalLink className="h-3 w-3" />Reject tx
+                    </a>
+                  )}
+                  {req.revokeEtherscanUrl && (
+                    <a href={req.revokeEtherscanUrl} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:underline">
+                      <ExternalLink className="h-3 w-3" />Revoke tx
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {/* ── Owner note (from more-info) ── */}
+              {req.ownerNote && (
+                <div className="p-3 rounded-xl bg-blue-500/8 border border-blue-500/20">
+                  <p className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider mb-1">
+                    Your note to researcher
+                  </p>
+                  <p className="text-xs text-foreground/80">{req.ownerNote}</p>
+                </div>
+              )}
+
+              {/* ── More Info note area ── */}
+              <AnimatePresence>
+                {noteOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="space-y-2"
+                  >
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Message to researcher (required)
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Specify what additional information you need…"
+                      value={note}
+                      onChange={e => setNote(e.target.value)}
+                      className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm
+                                 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => { setNoteOpen(false); setNote(""); }}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700 text-white"
+                        disabled={!note.trim()}
+                        onClick={() => { onMoreInfo(req, note.trim()); setNoteOpen(false); setNote(""); }}
+                      >
+                        <Send className="h-3.5 w-3.5 mr-1.5" />Send
+                      </Button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── Action buttons ── */}
+              <div className="flex flex-wrap gap-2 pt-1 border-t border-border/50">
+                {/* PENDING actions */}
+                {canAct && !noteOpen && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                      onClick={e => { e.stopPropagation(); onReject(req); }}
+                    >
+                      <X className="h-4 w-4 mr-1" />Deny
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-blue-400 border-blue-400/30 hover:bg-blue-500/10"
+                      onClick={e => { e.stopPropagation(); setNoteOpen(true); }}
+                    >
+                      <MessageSquare className="h-4 w-4 mr-1" />Request More Info
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="bg-gradient-to-r from-primary to-purple-600 text-white
+                                 hover:opacity-90 shadow-md shadow-primary/25 ml-auto"
+                      onClick={e => { e.stopPropagation(); onApprove(req); }}
+                    >
+                      <Check className="h-4 w-4 mr-1" />Approve
+                    </Button>
+                  </>
+                )}
+
+                {/* APPROVED / can revoke */}
+                {canRevoke && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                    onClick={e => { e.stopPropagation(); onRevoke(req); }}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-1" />Revoke Access
+                  </Button>
+                )}
+
+                {/* EXPIRED */}
+                {req.status === "approved" && isExpired && (
+                  <span className="text-xs text-muted-foreground italic px-2 flex items-center gap-1">
+                    <Clock className="h-3.5 w-3.5" />Access expired
+                  </span>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
 type Step = "idle" | "confirm" | "pin";
 
-/* ════════════════════════════════════════════════════════════════
-   MAIN PAGE
-════════════════════════════════════════════════════════════════ */
 const Requests = () => {
-  const { user, token } = useAuth();
-  const isOwner = user?.role === "owner";
+  const { token } = useAuth();
 
-  // ── Researcher state ───────────────────────────────────────────────────────
-  const [datasets,   setDatasets]   = useState<Dataset[]>([]);
-  const [dsLoading,  setDsLoading]  = useState(true);
-  const [dsError,    setDsError]    = useState<string | null>(null);
-  const [search,     setSearch]     = useState("");
-  const [requested,  setRequested]  = useState<Set<string>>(new Set());
-  const [requesting, setRequesting] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-
-  // ── Owner state ────────────────────────────────────────────────────────────
   const [incoming,    setIncoming]    = useState<IncomingRequest[]>([]);
-  const [inLoading,   setInLoading]   = useState(true);
-  const [inError,     setInError]     = useState<string | null>(null);
-  const [inRefreshing,setInRefreshing]= useState(false);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState<string | null>(null);
+  const [refreshing,  setRefreshing]  = useState(false);
   const [searchIn,    setSearchIn]    = useState("");
-  const [step,        setStep]        = useState<Step>("idle");
-  const [pending,     setPending]     = useState<{ req: IncomingRequest; action: "approve" | "reject" } | null>(null);
-  const [submitting,  setSubmitting]  = useState(false);
 
-  /* ── Researcher: load datasets ──────────────────────────────────────────── */
-  const fetchDatasets = useCallback(async (silent = false) => {
-    if (!token || isOwner) return;
-    if (!silent) setDsLoading(true); else setRefreshing(true);
-    setDsError(null);
-    try {
-      const res  = await fetch("http://localhost:5000/api/files/public", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to load datasets");
-      setDatasets(data.files ?? []);
-    } catch (e: any) {
-      setDsError(e.message || "Network error");
-    } finally {
-      setDsLoading(false);
-      setRefreshing(false);
-    }
-  }, [token, isOwner]);
+  // PIN flow state
+  const [step,       setStep]       = useState<Step>("idle");
+  const [pending,    setPending]    = useState<{ req: IncomingRequest; action: "approve" | "reject" } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => { fetchDatasets(); }, [fetchDatasets]);
-  useEffect(() => {
-    if (isOwner) return;
-    const id = setInterval(() => fetchDatasets(true), 20_000);
-    return () => clearInterval(id);
-  }, [fetchDatasets, isOwner]);
+  // Status filter
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  /* ── Owner: load incoming requests ─────────────────────────────────────── */
+  // ── Fetch incoming ─────────────────────────────────────────────────────────
   const fetchIncoming = useCallback(async (silent = false) => {
-    if (!token || !isOwner) return;
-    if (!silent) setInLoading(true); else setInRefreshing(true);
-    setInError(null);
+    if (!token) return;
+    if (!silent) setLoading(true); else setRefreshing(true);
+    setError(null);
     try {
       const res  = await fetch("http://localhost:5000/api/access/incoming-requests", {
         headers: { Authorization: `Bearer ${token}` },
@@ -237,53 +542,22 @@ const Requests = () => {
       if (!res.ok) throw new Error(data.message || "Failed to load requests");
       setIncoming(data.requests ?? []);
     } catch (e: any) {
-      setInError(e.message || "Network error");
+      setError(e.message || "Network error");
     } finally {
-      setInLoading(false);
-      setInRefreshing(false);
+      setLoading(false);
+      setRefreshing(false);
     }
-  }, [token, isOwner]);
+  }, [token]);
 
   useEffect(() => { fetchIncoming(); }, [fetchIncoming]);
   useEffect(() => {
-    if (!isOwner) return;
     const id = setInterval(() => fetchIncoming(true), 15_000);
     return () => clearInterval(id);
-  }, [fetchIncoming, isOwner]);
+  }, [fetchIncoming]);
 
-  /* ── Researcher: request access ─────────────────────────────────────────── */
-  const requestAccess = async (ds: Dataset) => {
-    if (requested.has(ds._id) || requesting === ds._id) return;
-    setRequesting(ds._id);
-    try {
-      const res  = await fetch("http://localhost:5000/api/access/request-access", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ fileId: ds._id }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 409) {
-          setRequested(prev => new Set(prev).add(ds._id));
-          toast.info(`Already requested access for ${ds.originalName}`);
-          return;
-        }
-        throw new Error(data.message || "Request failed");
-      }
-      setRequested(prev => new Set(prev).add(ds._id));
-      toast.success(`Access requested for ${ds.originalName}`);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to submit request");
-    } finally {
-      setRequesting(null);
-    }
-  };
-
-  /* ── Owner: approve / reject helpers ─────────────────────────────────────── */
-  const openDialog  = (req: IncomingRequest, action: "approve" | "reject") => {
-    setPending({ req, action });
-    setStep("confirm");
-  };
+  // ── Approve / reject helpers ───────────────────────────────────────────────
+  const openApprove = (req: IncomingRequest) => { setPending({ req, action: "approve" }); setStep("confirm"); };
+  const openReject  = (req: IncomingRequest) => { setPending({ req, action: "reject"  }); setStep("confirm"); };
   const closeDialog = () => { setStep("idle"); setPending(null); setSubmitting(false); };
 
   const onPinSuccess = async () => {
@@ -305,7 +579,7 @@ const Requests = () => {
       toast.success(
         pending.action === "approve"
           ? "Access approved · 24h grant active"
-          : "Request rejected"
+          : "Request denied"
       );
       fetchIncoming(true);
       closeDialog();
@@ -315,7 +589,7 @@ const Requests = () => {
     }
   };
 
-  /* ── Owner: revoke an approved request ─────────────────────────────────── */
+  // ── Revoke ─────────────────────────────────────────────────────────────────
   const revokeAccess = async (req: IncomingRequest) => {
     try {
       const res  = await fetch("http://localhost:5000/api/access/revoke-access", {
@@ -332,211 +606,101 @@ const Requests = () => {
     }
   };
 
-  /* ── Researcher filtered datasets ─────────────────────────────────────── */
-  const filteredDs = datasets.filter(d =>
-    search.trim() === "" ||
-    d.originalName.toLowerCase().includes(search.toLowerCase()) ||
-    d.owner?.name?.toLowerCase().includes(search.toLowerCase()) ||
-    d.description?.toLowerCase().includes(search.toLowerCase())
-  );
+  // ── More info ──────────────────────────────────────────────────────────────
+  const requestMoreInfo = async (req: IncomingRequest, note: string) => {
+    try {
+      const res  = await fetch("http://localhost:5000/api/access/request-more-info", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ requestId: req._id, ownerNote: note }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed");
+      toast.success("Researcher notified — awaiting more information.");
+      fetchIncoming(true);
+    } catch (e: any) {
+      toast.error(e.message || "Failed");
+    }
+  };
 
-  /* ── Owner filtered incoming ──────────────────────────────────────────── */
-  const filteredIn = incoming.filter(r =>
-    searchIn.trim() === "" ||
-    r.researcher.name.toLowerCase().includes(searchIn.toLowerCase()) ||
-    r.file.originalName.toLowerCase().includes(searchIn.toLowerCase())
-  );
+  // ── Filter ─────────────────────────────────────────────────────────────────
+  const filtered = incoming.filter(r => {
+    const q = searchIn.toLowerCase();
+    const matchSearch = !q
+      || r.researcher.name.toLowerCase().includes(q)
+      || r.file.originalName.toLowerCase().includes(q)
+      || (r.projectTitle ?? "").toLowerCase().includes(q)
+      || (r.institution  ?? "").toLowerCase().includes(q);
+    const matchStatus = statusFilter === "all" || r.status === statusFilter;
+    return matchSearch && matchStatus;
+  });
 
-  /* ════════════════════════════════════════════════════════════════
-     RESEARCHER VIEW
-  ════════════════════════════════════════════════════════════════ */
-  if (!isOwner) {
-    return (
-      <>
-        <PageHeader
-          title="Datasets"
-          description={
-            datasets.length > 0
-              ? `${datasets.length} genomic dataset${datasets.length !== 1 ? "s" : ""} available.`
-              : "Browse available genomic datasets and request access."
-          }
-        />
+  // Status counts for filter pills
+  const counts = incoming.reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = (acc[r.status] || 0) + 1;
+    return acc;
+  }, {});
 
-        {/* Search + Refresh */}
-        <div className="flex items-center gap-2 mb-6">
-          <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search datasets…"
-              className="pl-9"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <Button variant="outline" size="icon" title="Refresh" onClick={() => fetchDatasets(true)} disabled={refreshing}>
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          </Button>
-        </div>
-
-        {/* Loading */}
-        {dsLoading && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {[...Array(6)].map((_, i) => (
-              <div key={i} className="rounded-xl border border-border bg-card p-5 space-y-3 animate-pulse">
-                <div className="flex gap-3">
-                  <div className="h-11 w-11 rounded-xl bg-muted" />
-                  <div className="flex-1 space-y-2 pt-1">
-                    <div className="h-4 bg-muted rounded w-3/4" />
-                    <div className="h-3 bg-muted rounded w-1/3" />
-                  </div>
-                </div>
-                <div className="h-3 bg-muted rounded w-full" />
-                <div className="h-9 bg-muted rounded-lg w-full mt-2" />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Error */}
-        {!dsLoading && dsError && (
-          <div className="flex flex-col items-center justify-center py-16 text-center rounded-xl border border-dashed border-red-500/30 bg-red-500/5">
-            <AlertTriangle className="h-10 w-10 text-red-400 mb-3" />
-            <p className="text-sm font-medium text-red-400">{dsError}</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={() => fetchDatasets()}>
-              <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
-            </Button>
-          </div>
-        )}
-
-        {/* Empty */}
-        {!dsLoading && !dsError && filteredDs.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center text-center py-20 rounded-xl border border-dashed"
-          >
-            <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
-              <Database className="h-8 w-8 text-muted-foreground" />
-            </div>
-            {datasets.length === 0 ? (
-              <>
-                <h3 className="text-lg font-semibold mb-1">No Datasets Available Yet</h3>
-                <p className="text-sm text-muted-foreground max-w-sm">
-                  Genomic files uploaded by data owners will appear here automatically.
-                </p>
-              </>
-            ) : (
-              <>
-                <h3 className="text-lg font-semibold mb-1">No Results</h3>
-                <p className="text-sm text-muted-foreground">No datasets match your search.</p>
-                <Button variant="outline" size="sm" className="mt-4" onClick={() => setSearch("")}>Clear Search</Button>
-              </>
-            )}
-          </motion.div>
-        )}
-
-        {/* Dataset grid */}
-        {!dsLoading && !dsError && filteredDs.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filteredDs.map((ds, i) => {
-              const ext = EXT_COLORS[ds.extension] ?? EXT_COLORS[".vcf"];
-              const isRequested  = requested.has(ds._id);
-              const isRequesting = requesting === ds._id;
-              return (
-                <motion.div key={ds._id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-                  <Card className="p-5 shadow-card hover:shadow-elegant transition-all h-full flex flex-col hover:border-primary/40 group">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className={`h-11 w-11 rounded-xl flex items-center justify-center flex-shrink-0 ${ext.bg}`}>
-                        <Dna className={`h-5 w-5 ${ext.text}`} />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {ds.isEncrypted && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/15 text-blue-400">
-                            <Shield className="h-3 w-3" /> Encrypted
-                          </span>
-                        )}
-                        <Badge variant="secondary" className={`${ext.text} border-0`}>{ext.badge}</Badge>
-                      </div>
-                    </div>
-                    <h3 className="font-semibold truncate text-sm" title={ds.originalName}>{ds.originalName}</h3>
-                    <div className="flex flex-col gap-1 mt-2 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1.5">
-                        <User className="h-3.5 w-3.5 flex-shrink-0" />
-                        {ds.owner?.name ?? "Unknown Owner"}
-                      </span>
-                      <div className="flex gap-3">
-                        <span className="flex items-center gap-1.5"><HardDrive className="h-3.5 w-3.5" />{formatSize(ds.sizeBytes)}</span>
-                        <span className="flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5" />{formatDate(ds.createdAt)}</span>
-                      </div>
-                    </div>
-                    {ds.description && (
-                      <p className="text-sm text-muted-foreground mt-3 flex-1 line-clamp-2">{ds.description}</p>
-                    )}
-                    <div className="mt-3 mb-1"><IpfsPill status={ds.ipfsStatus} /></div>
-                    <Button
-                      className="mt-3 w-full"
-                      variant={isRequested ? "secondary" : "default"}
-                      disabled={isRequested || isRequesting}
-                      onClick={() => requestAccess(ds)}
-                    >
-                      {isRequesting ? (
-                        <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Requesting…</>
-                      ) : isRequested ? (
-                        <><Check className="h-4 w-4 mr-1" />Requested</>
-                      ) : (
-                        <><FlaskConical className="h-4 w-4 mr-1.5" />Request Access</>
-                      )}
-                    </Button>
-                  </Card>
-                </motion.div>
-              );
-            })}
-          </div>
-        )}
-      </>
-    );
-  }
-
-  /* ════════════════════════════════════════════════════════════════
-     OWNER VIEW — real incoming requests
-  ════════════════════════════════════════════════════════════════ */
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
       <PageHeader
         title="Access Requests"
-        description="Review and manage researcher access requests. All decisions are recorded on the blockchain."
+        description="Review and manage researcher access requests. Expand a card to see full details."
         actions={
-          <Button variant="outline" size="sm" onClick={() => fetchIncoming(true)} disabled={inRefreshing}>
-            <RefreshCw className={`h-4 w-4 mr-1.5 ${inRefreshing ? "animate-spin" : ""}`} />
+          <Button variant="outline" size="sm" onClick={() => fetchIncoming(true)} disabled={refreshing}>
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         }
       />
 
-      {/* Search */}
-      <div className="relative mb-5 max-w-xs">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search by researcher or file…"
-          className="pl-9"
-          value={searchIn}
-          onChange={e => setSearchIn(e.target.value)}
-        />
+      {/* ── Search + Filter ── */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by researcher, project, file…"
+            className="pl-9"
+            value={searchIn}
+            onChange={e => setSearchIn(e.target.value)}
+          />
+        </div>
+        {/* Status filter pills */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {(["all", "pending", "approved", "more-info", "rejected", "revoked"] as const).map(s => {
+            const meta  = STATUS_META[s];
+            const count = s === "all" ? incoming.length : (counts[s] || 0);
+            return (
+              <button
+                key={s}
+                onClick={() => setStatusFilter(s)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all
+                            ${statusFilter === s
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+              >
+                {s === "all" ? "All" : (meta?.label ?? s)} {count > 0 && `(${count})`}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Loading */}
-      {inLoading && (
+      {/* ── Loading ── */}
+      {loading && (
         <div className="space-y-3">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="rounded-xl border border-border bg-card p-5 animate-pulse">
+            <div key={i} className="rounded-2xl border border-border bg-card p-5 animate-pulse">
               <div className="flex items-center gap-4">
-                <div className="h-10 w-10 rounded-full bg-muted" />
+                <div className="h-11 w-11 rounded-xl bg-muted" />
                 <div className="flex-1 space-y-2">
                   <div className="h-4 bg-muted rounded w-1/3" />
                   <div className="h-3 bg-muted rounded w-1/2" />
                 </div>
                 <div className="flex gap-2">
-                  <div className="h-9 w-20 bg-muted rounded-lg" />
-                  <div className="h-9 w-20 bg-muted rounded-lg" />
+                  <div className="h-6 w-20 bg-muted rounded-full" />
+                  <div className="h-6 w-20 bg-muted rounded-full" />
                 </div>
               </div>
             </div>
@@ -544,19 +708,19 @@ const Requests = () => {
         </div>
       )}
 
-      {/* Error */}
-      {!inLoading && inError && (
+      {/* ── Error ── */}
+      {!loading && error && (
         <div className="flex flex-col items-center py-12 text-center rounded-xl border border-dashed border-red-500/30 bg-red-500/5">
           <AlertTriangle className="h-8 w-8 text-red-400 mb-2" />
-          <p className="text-sm text-red-400">{inError}</p>
+          <p className="text-sm text-red-400">{error}</p>
           <Button variant="outline" size="sm" className="mt-3" onClick={() => fetchIncoming()}>
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
           </Button>
         </div>
       )}
 
-      {/* Empty */}
-      {!inLoading && !inError && filteredIn.length === 0 && (
+      {/* ── Empty ── */}
+      {!loading && !error && filtered.length === 0 && (
         <motion.div
           initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
           className="flex flex-col items-center py-20 text-center rounded-xl border border-dashed"
@@ -565,130 +729,80 @@ const Requests = () => {
             <ShieldCheck className="h-7 w-7 text-muted-foreground" />
           </div>
           <h3 className="font-semibold mb-1">
-            {incoming.length === 0 ? "No Requests Yet" : "No Results"}
+            {incoming.length === 0 ? "No Requests Yet" : "No Matching Requests"}
           </h3>
           <p className="text-sm text-muted-foreground">
             {incoming.length === 0
               ? "When researchers request access to your files, they'll appear here."
-              : "No requests match your search."}
+              : "Try adjusting your search or filter."}
           </p>
         </motion.div>
       )}
 
-      {/* Request list */}
-      {!inLoading && !inError && filteredIn.length > 0 && (
+      {/* ── Request cards ── */}
+      {!loading && !error && filtered.length > 0 && (
         <div className="space-y-3">
-          {filteredIn.map((r, i) => {
-            const statusCls = STATUS_COLORS[r.status] ?? "bg-zinc-500/20 text-zinc-400";
-            return (
-              <motion.div key={r._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
-                <Card className="p-5 shadow-card">
-                  <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h3 className="font-semibold text-sm">{r.researcher.name}</h3>
-                        <Badge variant="outline" className="text-xs">{r.researcher.email}</Badge>
-                        {r.researcher.orcid && (
-                          <Badge variant="outline" className="text-xs font-mono text-blue-400 border-blue-400/30">{r.researcher.orcid}</Badge>
-                        )}
-                        <Badge className={`text-xs capitalize ${statusCls}`}>{r.status}</Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground">
-                        File: <span className="font-mono text-foreground text-xs">{r.file.originalName}</span>
-                      </p>
-                      {r.reason && (
-                        <p className="text-xs text-muted-foreground mt-0.5">Reason: {r.reason}</p>
-                      )}
-                      <p className="text-xs text-muted-foreground mt-0.5">Requested {formatDate(r.createdAt)}</p>
-
-                      {/* Blockchain receipt links */}
-                      {(r.approveTxHash || r.rejectTxHash || r.revokeTxHash) && (
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {r.approveEtherscanUrl && (
-                            <a href={r.approveEtherscanUrl} target="_blank" rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
-                              <ExternalLink className="h-3 w-3" />Approve tx
-                            </a>
-                          )}
-                          {r.rejectEtherscanUrl && (
-                            <a href={r.rejectEtherscanUrl} target="_blank" rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-xs text-red-400 hover:underline">
-                              <ExternalLink className="h-3 w-3" />Reject tx
-                            </a>
-                          )}
-                          {r.revokeEtherscanUrl && (
-                            <a href={r.revokeEtherscanUrl} target="_blank" rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:underline">
-                              <ExternalLink className="h-3 w-3" />Revoke tx
-                            </a>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex gap-2 flex-shrink-0">
-                      {r.status === "pending" && (
-                        <>
-                          <Button variant="outline" size="sm" onClick={() => openDialog(r, "reject")}>
-                            <X className="h-4 w-4 mr-1" />Reject
-                          </Button>
-                          <Button size="sm" onClick={() => openDialog(r, "approve")} className="bg-gradient-primary hover:opacity-90 shadow-elegant">
-                            <Check className="h-4 w-4 mr-1" />Approve
-                          </Button>
-                        </>
-                      )}
-                      {r.status === "approved" && (() => {
-                        const isExpired = r.accessExpiresAt
-                          ? new Date(r.accessExpiresAt).getTime() <= Date.now()
-                          : false;
-                        return isExpired ? (
-                          <span className="text-xs text-muted-foreground italic px-2">Access expired</span>
-                        ) : (
-                          <Button variant="outline" size="sm" onClick={() => revokeAccess(r)}
-                            className="text-destructive border-destructive/30 hover:bg-destructive/10">
-                            <RotateCcw className="h-4 w-4 mr-1" />Revoke
-                          </Button>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                </Card>
-              </motion.div>
-            );
-          })}
+          {filtered.map(r => (
+            <RequestCard
+              key={r._id}
+              req={r}
+              onApprove={openApprove}
+              onReject={openReject}
+              onRevoke={revokeAccess}
+              onMoreInfo={requestMoreInfo}
+            />
+          ))}
         </div>
       )}
 
-      {/* Modals */}
+      {/* ── PIN modals ── */}
       <AnimatePresence>
         {step === "confirm" && pending && (
           <Modal onClose={closeDialog}>
             <div className="space-y-5">
               <div className="flex items-center gap-3">
-                <div className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0 ${pending.action === "approve" ? "bg-primary/20" : "bg-destructive/20"}`}>
+                <div className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0
+                                ${pending.action === "approve" ? "bg-primary/20" : "bg-destructive/20"}`}>
                   {pending.action === "approve"
                     ? <ShieldCheck className="h-5 w-5 text-primary" />
                     : <AlertTriangle className="h-5 w-5 text-destructive" />}
                 </div>
                 <div>
                   <p className="font-semibold text-sm">
-                    {pending.action === "approve" ? "Approve Access?" : "Reject Request?"}
+                    {pending.action === "approve" ? "Approve Access?" : "Deny Request?"}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Are you sure you want to <span className={`font-medium ${pending.action === "approve" ? "text-primary" : "text-destructive"}`}>{pending.action}</span> the request from{" "}
-                    <span className="text-foreground font-medium">{pending.req.researcher.name}</span>?
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                    For <span className="text-foreground font-medium">{pending.req.researcher.name}</span>
+                    <span className="block font-mono text-[11px] text-muted-foreground/70 break-all mt-0.5">
+                      {pending.req.file.originalName}
+                    </span>
                   </p>
                 </div>
               </div>
-              <div className={`rounded-xl border p-3 text-xs ${pending.action === "approve" ? "border-primary/20 bg-primary/5 text-primary" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
+
+              {/* Access type reminder */}
+              <div className={`rounded-xl border p-3 text-xs
+                              ${pending.action === "approve"
+                                ? "border-primary/20 bg-primary/5 text-primary"
+                                : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
                 {pending.action === "approve"
-                  ? "A 24-hour blockchain-verified access grant will be created. All events are recorded on Sepolia Testnet."
-                  : "The request will be permanently rejected on the blockchain."}
+                  ? <>
+                      A 24-hour blockchain-verified access grant will be created.
+                      {pending.req.accessType === "downloadable" && (
+                        <span className="block mt-1 font-semibold text-purple-400">
+                          ⚠ You are approving DOWNLOAD access for this researcher.
+                        </span>
+                      )}
+                    </>
+                  : "The request will be permanently rejected."}
               </div>
+
               <div className="flex gap-2 pt-1">
                 <Button variant="outline" className="flex-1" onClick={closeDialog}>No, go back</Button>
                 <Button
-                  className={`flex-1 ${pending.action === "approve" ? "bg-gradient-primary hover:opacity-90 text-primary-foreground" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}`}
+                  className={`flex-1 ${pending.action === "approve"
+                    ? "bg-gradient-primary hover:opacity-90 text-primary-foreground"
+                    : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}`}
                   onClick={() => setStep("pin")}
                 >
                   Yes, {pending.action}
