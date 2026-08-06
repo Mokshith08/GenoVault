@@ -36,7 +36,7 @@ const accessRequestSchema = new mongoose.Schema(
       required: true,
     },
 
-    // Optional reason provided by the researcher
+    // Optional legacy reason field (kept for backward-compat)
     reason: {
       type: String,
       trim: true,
@@ -44,10 +44,83 @@ const accessRequestSchema = new mongoose.Schema(
       default: "",
     },
 
+    // ── Research Access Request structured fields ──────────────────────────
+    projectTitle: {
+      type: String,
+      trim: true,
+      maxlength: [200, "Project title cannot exceed 200 characters"],
+      default: "",
+    },
+
+    // Purpose of research (detailed, replaces reason going forward)
+    purpose: {
+      type: String,
+      trim: true,
+      maxlength: [2000, "Purpose cannot exceed 2000 characters"],
+      default: "",
+    },
+
+    // Access level requested
+    accessType: {
+      type: String,
+      enum: ["read-only", "downloadable"],
+      default: "read-only",
+    },
+
+    // Whether researcher checked "may request extension later"
+    extensionRequested: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Whether data will be shared with collaborators (shown to owner before approval)
+    dataSharedWithCollaborators: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Researcher's institution (pre-filled from profile)
+    institution: {
+      type: String,
+      trim: true,
+      maxlength: [200, "Institution name cannot exceed 200 characters"],
+      default: "",
+    },
+
+    // Researcher's contact email for this request
+    contactEmail: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    // Benefits / risks as stated by researcher
+    benefits: {
+      type: String,
+      trim: true,
+      maxlength: [500, "Benefits cannot exceed 500 characters"],
+      default: "",
+    },
+
+    risks: {
+      type: String,
+      trim: true,
+      maxlength: [500, "Risks cannot exceed 500 characters"],
+      default: "",
+    },
+
+    // Owner's note when requesting more information
+    ownerNote: {
+      type: String,
+      trim: true,
+      maxlength: [1000, "Owner note cannot exceed 1000 characters"],
+      default: "",
+    },
+
     // Workflow status
     status: {
       type: String,
-      enum: ["pending", "approved", "denied", "rejected", "revoked"],
+      enum: ["pending", "approved", "denied", "rejected", "revoked", "more-info"],
       default: "pending",
       index: true,
     },
