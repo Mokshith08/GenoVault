@@ -224,18 +224,10 @@ export default function AuditLogs() {
 
         {/* Footer summary */}
         {!loading && !error && events.length > 0 && (
-          <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground flex items-center justify-between">
+          <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">
             <span>
               {filtered.length} of {events.length} blockchain event{events.length !== 1 ? "s" : ""}
             </span>
-            <a
-              href="https://sepolia.etherscan.io"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-blue-400 hover:underline"
-            >
-              View on Etherscan <ExternalLink className="h-3 w-3" />
-            </a>
           </div>
         )}
       </div>
