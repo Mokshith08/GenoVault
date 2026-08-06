@@ -35,7 +35,7 @@ const Verification = () => {
 
   /* ── Fetch real files from backend ─────────────────────────── */
   const fetchFiles = useCallback(async () => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/files/my-files`, {

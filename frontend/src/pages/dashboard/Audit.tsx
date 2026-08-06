@@ -79,7 +79,7 @@ const Audit = () => {
   const [action,     setAction]     = useState<string>("all");
 
   const fetchAudit = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {

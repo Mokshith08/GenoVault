@@ -7,6 +7,7 @@ export interface MockUser {
   email:            string;
   role:             Role;
   profileCompleted: boolean;
+  pinSet?:          boolean;     // true = PIN already saved in Azure Key Vault
   age?:             number | null;
   gender?:          string | null;
   country?:         string | null;
@@ -65,6 +66,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem("genovault-user",  JSON.stringify(u));
     setUser(u);
     setToken(jwt);
+    // If the backend says this user already has a PIN set in Key Vault,
+    // mark it in localStorage so PinSetupModal doesn't ask them to create one again.
+    if (u.pinSet && !localStorage.getItem("genovault-pin")) {
+      localStorage.setItem("genovault-pin", "__SET__");
+      setPinState("__SET__");
+    }
   }, []);
 
   // ── logout: clears session state + localStorage (PIN is kept — device-local) ─

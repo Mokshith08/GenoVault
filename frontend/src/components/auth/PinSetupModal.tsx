@@ -36,8 +36,8 @@ export const PinSetupModal = () => {
   const [shake,   setShake]   = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Show ONLY when logged in AND no PIN in localStorage
-  const showModal = !!user && !pin;
+  // Show ONLY when: logged in, owner role, no PIN in localStorage, AND backend confirms no PIN set
+  const showModal = !!user && user.role === "owner" && !pin && !user.pinSet;
 
   // Reset when modal (re)opens
   useEffect(() => {

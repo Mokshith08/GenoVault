@@ -9,13 +9,16 @@ const mongoose = require("mongoose");
 const connectDB = async () => {
   try {
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
-      // Mongoose 7+ no longer needs these flags, but they are harmless
-      // and make intent explicit for readers on older docs.
+      serverSelectionTimeoutMS: 5000,  // fail fast instead of buffering 30s
     });
 
     console.log(`✅  MongoDB connected: ${conn.connection.host}`);
   } catch (err) {
     console.error(`❌  MongoDB connection error: ${err.message}`);
+    if (err.message.includes("ECONNREFUSED") || err.message.includes("timed out") || err.message.includes("whitelist")) {
+      console.error("💡  Fix: Go to MongoDB Atlas → Security → Network Access → Add your current IP address.");
+      console.error("💡  Or allow all IPs (0.0.0.0/0) for development.");
+    }
     process.exit(1); // Crash fast — don't silently run without DB
   }
 };

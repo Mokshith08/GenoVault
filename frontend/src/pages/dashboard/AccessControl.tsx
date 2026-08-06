@@ -135,7 +135,7 @@ const AccessControl = () => {
 
   /* ── Fetch approved grants ─────────────────────────────────────── */
   const fetchGrants = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {

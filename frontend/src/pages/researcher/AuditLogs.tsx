@@ -71,7 +71,7 @@ export default function AuditLogs() {
   const [search,    setSearch]    = useState("");
 
   const fetchAudit = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {

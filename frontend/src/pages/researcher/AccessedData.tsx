@@ -241,18 +241,20 @@ export default function AccessedData() {
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchAccesses = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }   // no token → stop skeleton
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {
       const res  = await fetch("http://localhost:5000/api/access/my-requests", {
         headers: { Authorization: `Bearer ${token}` },
+        cache:   "no-store",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to load");
 
-      // Only show approved grants that haven't expired yet
+      // Only show approved grants that haven't expired yet, and skip orphaned (null file/owner)
       const active = (data.requests ?? []).filter((r: ApprovedAccess) => {
+        if (!r.file || !r.owner) return false;   // deleted doc guard
         if (r.status !== "approved") return false;
         if (!r.accessExpiresAt) return true;
         return new Date(r.accessExpiresAt).getTime() > Date.now();

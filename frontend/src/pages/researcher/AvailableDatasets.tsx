@@ -381,7 +381,7 @@ export default function AvailableDatasets() {
 
   /* ── Fetch my existing requests and build statusMap ─────────────── */
   const fetchMyRequests = useCallback(async () => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }
     try {
       const res  = await apiFetch("/api/access/my-requests", {
         headers: { Authorization: `Bearer ${token}` },
@@ -424,7 +424,7 @@ export default function AvailableDatasets() {
   }, [token]);
 
   const fetchDatasets = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {

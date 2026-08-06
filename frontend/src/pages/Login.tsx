@@ -108,11 +108,16 @@ const Login = () => {
 
   // Holds verified user data between step 1 and step 2
   const [verifiedUser, setVerifiedUser] = useState<{
-    name: string;
-    email: string;
-    role: "owner" | "researcher";
-    token: string;
-    mfa_enabled: boolean;
+    name:             string;
+    email:            string;
+    role:             "owner" | "researcher";
+    token:            string;
+    mfa_enabled:      boolean;
+    profileCompleted: boolean;
+    pinSet:           boolean;
+    age:              number | null;
+    gender:           string | null;
+    country:          string | null;
   } | null>(null);
 
   /* ── Validation ─────────────────────────────────────────── */
@@ -146,6 +151,7 @@ const Login = () => {
         token:            data.token,
         mfa_enabled:      !!data.user.mfa_enabled,
         profileCompleted: data.user.profileCompleted ?? false,
+        pinSet:           !!data.user.pinSet,
         age:              data.user.age    ?? null,
         gender:           data.user.gender ?? null,
         country:          data.user.country ?? null,
@@ -210,6 +216,7 @@ const Login = () => {
           email:            verifiedUser.email,
           role:             verifiedUser.role,
           profileCompleted: verifiedUser.profileCompleted ?? false,
+          pinSet:           verifiedUser.pinSet ?? false,
           age:              verifiedUser.age    ?? null,
           gender:           verifiedUser.gender ?? null,
           country:          verifiedUser.country ?? null,

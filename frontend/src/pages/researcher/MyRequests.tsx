@@ -35,7 +35,7 @@ interface AccessReq {
   // Structured
   projectTitle?:               string;
   purpose?:                    string;
-  accessType?:                 "read-only" | "downloadable";
+  accessType?:                 "read-only" | "downloadable" | "download";
   extensionRequested?:         boolean;
   dataSharedWithCollaborators?:boolean;
   institution?:                string;
@@ -91,11 +91,14 @@ function RequestCard({ req, token }: { req: AccessReq; token: string | null }) {
   const [expanded,     setExpanded]     = useState(false);
   const [downloading,  setDownloading]  = useState(false);
 
+  // Guard: if file or owner was deleted from DB, skip rendering this card
+  if (!req.file || !req.owner) return null;
+
   const isExpired    = req.accessExpiresAt
     ? new Date(req.accessExpiresAt).getTime() <= Date.now()
     : false;
   const isActive     = req.status === "approved" && !isExpired;
-  const canDownload  = isActive && req.accessType === "downloadable";
+  const canDownload  = isActive && (req.accessType === "downloadable" || req.accessType === "download");
   const statusMeta   = STATUS_META[req.status] ?? STATUS_META.pending;
 
   // Show the effective status label
@@ -180,10 +183,10 @@ function RequestCard({ req, token }: { req: AccessReq; token: string | null }) {
             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
               {/* Access type pill */}
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold
-                               ${req.accessType === "downloadable"
+                               ${(req.accessType === "downloadable" || req.accessType === "download")
                                   ? "bg-purple-500/15 text-purple-400"
                                   : "bg-blue-500/15 text-blue-400"}`}>
-                {req.accessType === "downloadable"
+                {(req.accessType === "downloadable" || req.accessType === "download")
                   ? <><Download className="h-3 w-3" />Downloadable</>
                   : <><Lock className="h-3 w-3" />Read Only</>
                 }
@@ -403,16 +406,18 @@ export default function MyRequests() {
   const [error,      setError]      = useState<string | null>(null);
 
   const fetchRequests = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }   // no token → stop skeleton
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {
       const res  = await fetch("http://localhost:5000/api/access/my-requests", {
         headers: { Authorization: `Bearer ${token}` },
+        cache:   "no-store",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to load requests");
-      setRequests(data.requests ?? []);
+      // Filter out any requests with null file/owner (deleted DB docs) as safety net
+      setRequests((data.requests ?? []).filter((r: AccessReq) => r.file != null && r.owner != null));
     } catch (e: any) {
       setError(e.message || "Network error");
     } finally {
@@ -420,6 +425,7 @@ export default function MyRequests() {
       setRefreshing(false);
     }
   }, [token]);
+
 
   useEffect(() => { fetchRequests(); }, [fetchRequests]);
 

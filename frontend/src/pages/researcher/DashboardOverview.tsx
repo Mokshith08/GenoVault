@@ -21,14 +21,14 @@ export default function DashboardOverview() {
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchStats = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }   // no token → stop skeleton
     if (!silent) setLoading(true);
     else         setRefreshing(true);
 
     try {
       const [dsRes, reqRes] = await Promise.all([
-        fetch("http://localhost:5000/api/files/public",        { headers: { Authorization: `Bearer ${token}` } }),
-        fetch("http://localhost:5000/api/access/my-requests",  { headers: { Authorization: `Bearer ${token}` } }),
+        fetch("http://localhost:5000/api/files/public",        { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
+        fetch("http://localhost:5000/api/access/my-requests",  { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }),
       ]);
 
       const dsData  = dsRes.ok  ? await dsRes.json()  : { files:    [] };

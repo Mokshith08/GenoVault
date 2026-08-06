@@ -471,9 +471,9 @@ const downloadFile = async (req, res) => {
       });
     }
 
-    // -- 2b. Access-type gate: only "download" type can download the file
+    // -- 2b. Access-type gate: only "downloadable" (or legacy "download") type can download
     // "read-only" means metadata/preview access only
-    if (request.accessType && request.accessType !== "download") {
+    if (request.accessType && request.accessType !== "downloadable" && request.accessType !== "download") {
       return res.status(403).json({
         success: false,
         message: `Download is not permitted — your access type is "${request.accessType}". You need download access.`,
@@ -600,7 +600,12 @@ const getMyRequests = async (req, res) => {
       .populate("owner", "name email")
       .sort({ createdAt: -1 });
 
-    return res.status(200).json({ success: true, count: requests.length, requests });
+    // Filter out orphaned requests where the file or owner was deleted
+    const safeRequests = requests.filter(r => r.file != null && r.owner != null);
+
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    return res.status(200).json({ success: true, count: safeRequests.length, requests: safeRequests });
   } catch (err) {
     console.error("[getMyRequests]", err);
     return res.status(500).json({ success: false, message: "Failed to fetch requests" });
@@ -616,11 +621,17 @@ const getIncomingRequests = async (req, res) => {
   try {
     const ownerId = req.user.userId;
     const requests = await AccessRequest.find({ owner: ownerId })
-      .populate("file", "originalName sizeBytes isEncrypted")
+      .populate("file", "originalName sizeBytes isEncrypted extension")
       .populate("researcher", "name email")
       .sort({ createdAt: -1 });
 
-    return res.status(200).json({ success: true, count: requests.length, requests });
+    // Filter out orphaned requests where the file or researcher was deleted
+    // (populate returns null for missing referenced docs — accessing .name etc. on null crashes frontend)
+    const safeRequests = requests.filter(r => r.file != null && r.researcher != null);
+
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    return res.status(200).json({ success: true, count: safeRequests.length, requests: safeRequests });
   } catch (err) {
     console.error("[getIncomingRequests]", err);
     return res.status(500).json({ success: false, message: "Failed to fetch incoming requests" });

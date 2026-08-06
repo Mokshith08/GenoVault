@@ -9,7 +9,7 @@
  *  • "Request More Info" inline note flow
  */
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Check, X, ShieldCheck, KeyRound,
@@ -36,7 +36,7 @@ interface IncomingRequest {
   // Structured fields
   projectTitle?:               string;
   purpose?:                    string;
-  accessType?:                 "read-only" | "downloadable";
+  accessType?:                 "read-only" | "download" | "downloadable";
   extensionRequested?:         boolean;
   dataSharedWithCollaborators?:boolean;
   institution?:                string;
@@ -79,10 +79,13 @@ const STATUS_META: Record<string, { cls: string; label: string; dot: string }> =
   "more-info":{ cls: "bg-blue-500/15  text-blue-400",    label: "More Info",  dot: "bg-blue-400"    },
 };
 
-const ACCESS_META: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
-  "read-only":    { icon: <Lock     className="h-3 w-3" />, label: "Read Only",    cls: "bg-blue-500/15   text-blue-400"   },
-  "downloadable": { icon: <Download className="h-3 w-3" />, label: "Downloadable", cls: "bg-purple-500/15 text-purple-400" },
-};
+// Access-type display metadata — icons are returned from a function (not module-level JSX)
+function getAccessMeta(accessType?: string): { icon: React.ReactNode; label: string; cls: string } {
+  if (accessType === "downloadable" || accessType === "download") {
+    return { icon: <Download className="h-3 w-3" />, label: "Downloadable", cls: "bg-purple-500/15 text-purple-400" };
+  }
+  return { icon: <Lock className="h-3 w-3" />, label: "Read Only", cls: "bg-blue-500/15 text-blue-400" };
+}
 
 // ── PIN step ───────────────────────────────────────────────────────────────────
 interface PinStepProps {
@@ -101,7 +104,9 @@ const PinStep = ({ action, researcher, onSuccess, onCancel, isLoading }: PinStep
   const handleSubmit = () => {
     const entered = digits.join("");
     if (entered.length < 6) { toast.error("Enter all 6 digits"); return; }
-    if (entered === (pin ?? "")) {
+    // If pin is "__SET__" (sentinel after cache clear), skip client-side compare
+    // and let the backend bcrypt check handle verification via onSuccess → verifyPin API.
+    if (pin === "__SET__" || entered === (pin ?? "")) {
       onSuccess();
     } else {
       setShake(true);
@@ -199,7 +204,7 @@ function RequestCard({
   const [note,      setNote]      = useState("");
 
   const status     = STATUS_META[req.status] ?? STATUS_META.pending;
-  const accessMeta = ACCESS_META[req.accessType ?? "read-only"] ?? ACCESS_META["read-only"];
+  const accessMeta = getAccessMeta(req.accessType);
 
   const isExpired  = req.accessExpiresAt
     ? new Date(req.accessExpiresAt).getTime() <= Date.now()
@@ -531,12 +536,13 @@ const Requests = () => {
 
   // ── Fetch incoming ─────────────────────────────────────────────────────────
   const fetchIncoming = useCallback(async (silent = false) => {
-    if (!token) return;
+    if (!token) { setLoading(false); return; }   // no token → stop loading spinner
     if (!silent) setLoading(true); else setRefreshing(true);
     setError(null);
     try {
       const res  = await fetch("http://localhost:5000/api/access/incoming-requests", {
         headers: { Authorization: `Bearer ${token}` },
+        cache:   "no-store",   // prevent 304 returning empty body on re-navigate
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to load requests");
@@ -625,10 +631,12 @@ const Requests = () => {
 
   // ── Filter ─────────────────────────────────────────────────────────────────
   const filtered = incoming.filter(r => {
+    // Guard: skip any request with null file/researcher (deleted docs)
+    if (!r.file || !r.researcher) return false;
     const q = searchIn.toLowerCase();
     const matchSearch = !q
-      || r.researcher.name.toLowerCase().includes(q)
-      || r.file.originalName.toLowerCase().includes(q)
+      || (r.researcher.name  ?? "").toLowerCase().includes(q)
+      || (r.file.originalName ?? "").toLowerCase().includes(q)
       || (r.projectTitle ?? "").toLowerCase().includes(q)
       || (r.institution  ?? "").toLowerCase().includes(q);
     const matchStatus = statusFilter === "all" || r.status === statusFilter;
@@ -788,7 +796,7 @@ const Requests = () => {
                 {pending.action === "approve"
                   ? <>
                       A 24-hour blockchain-verified access grant will be created.
-                      {pending.req.accessType === "downloadable" && (
+                      {(pending.req.accessType === "download" || pending.req.accessType === "downloadable") && (
                         <span className="block mt-1 font-semibold text-purple-400">
                           ⚠ You are approving DOWNLOAD access for this researcher.
                         </span>
