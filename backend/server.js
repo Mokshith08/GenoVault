@@ -55,6 +55,7 @@ app.use(
     origin: process.env.CLIENT_ORIGIN || "http://localhost:8080",
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Content-Disposition", "Content-Length", "X-Encrypted-At-Rest"],
     credentials: true,
   })
 );
