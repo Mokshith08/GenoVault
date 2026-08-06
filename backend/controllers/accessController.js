@@ -19,12 +19,14 @@
  */
 
 const bcrypt         = require("bcryptjs");
+const crypto         = require("crypto");
+const { pipeline }   = require("stream");
 const User           = require("../models/User");
 const GenomicFile    = require("../models/GenomicFile");
 const AccessRequest  = require("../models/AccessRequest");
 const { retrieveEncryptionKey, retrievePinHash } = require("../services/keyVaultService");
-const { decryptBuffer }                  = require("../services/encryptionService");
-const { downloadBlobToBuffer }           = require("../services/azureService");
+const { getReadableBlobStream }                  = require("../services/azureService");
+
 const {
   requestAccess:   blockchainRequestAccess,
   approveAccess:   blockchainApproveAccess,
@@ -45,8 +47,20 @@ const ACCESS_GRANT_HOURS = parseInt(process.env.ACCESS_GRANT_HOURS) || 24;
 ─────────────────────────────────────────────────────────────────*/
 const requestAccess = async (req, res) => {
   try {
-    const { fileId, reason } = req.body;
-    const researcherId       = req.user.userId;
+    const {
+      fileId,
+      reason,
+      projectTitle,
+      purpose,
+      accessType,
+      extensionRequested,
+      dataSharedWithCollaborators,
+      institution,
+      contactEmail,
+      benefits,
+      risks,
+    } = req.body;
+    const researcherId = req.user.userId;
 
     if (!fileId) {
       return res.status(400).json({ success: false, message: "fileId is required" });
@@ -63,22 +77,65 @@ const requestAccess = async (req, res) => {
       return res.status(400).json({ success: false, message: "You cannot request access to your own file" });
     }
 
-    // Upsert: if a request already exists, return it; otherwise create
-    const existing = await AccessRequest.findOne({ file: fileId, researcher: researcherId });
+    // ── Cooldown / conflict check ─────────────────────────────────────────
+    // Find the MOST RECENT request for this file by this researcher
+    const existing = await AccessRequest.findOne(
+      { file: fileId, researcher: researcherId },
+      null,
+      { sort: { createdAt: -1 } }   // most recent first
+    );
+
     if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: `A request already exists with status: ${existing.status}`,
-        request: existing,
-      });
+      const COOLDOWN_MS   = 24 * 60 * 60 * 1000; // 24 hours
+      const now           = Date.now();
+
+      // "approved" is only truly active if the access window hasn't expired
+      const isApprovedAndActive =
+        existing.status === "approved" &&
+        existing.accessExpiresAt &&
+        new Date(existing.accessExpiresAt).getTime() > now;
+
+      // Active states — cannot re-request regardless of time
+      if (existing.status === "pending" || existing.status === "more-info" || isApprovedAndActive) {
+        return res.status(409).json({
+          success:       false,
+          message:       `A request already exists with status: ${existing.status}`,
+          request:       existing,
+          cooldownUntil: null, // blocked until owner acts
+        });
+      }
+
+      // All other states: denied / rejected / revoked / expired-approved
+      // Enforce 24h cooldown from when the request was CREATED
+      const cooldownUntil = new Date(existing.createdAt.getTime() + COOLDOWN_MS);
+      if (cooldownUntil.getTime() > now) {
+        return res.status(429).json({
+          success:       false,
+          message:       "You must wait 24 hours before requesting access to this dataset again.",
+          cooldownUntil: cooldownUntil.toISOString(),
+        });
+      }
+      // Cooldown expired — delete old request so a fresh one can be created
+      await AccessRequest.deleteOne({ _id: existing._id });
     }
 
     const accessRequest = await AccessRequest.create({
       file:       fileId,
       researcher: researcherId,
       owner:      file.owner,
-      reason:     reason || "",
-      status:     "pending",
+      // Legacy field
+      reason: reason || purpose || "",
+      // Structured fields
+      projectTitle:               projectTitle || "",
+      purpose:                    purpose      || reason || "",
+      accessType:                 accessType   || "read-only",
+      extensionRequested:         !!extensionRequested,
+      dataSharedWithCollaborators:!!dataSharedWithCollaborators,
+      institution:                institution  || "",
+      contactEmail:               contactEmail || "",
+      benefits:                   benefits     || "",
+      risks:                      risks        || "",
+      status:                     "pending",
     });
 
     // -- Blockchain: record access request on-chain (non-blocking)
@@ -397,7 +454,7 @@ const downloadFile = async (req, res) => {
     const request = await AccessRequest.findOne({
       file:       fileId,
       researcher: researcherId,
-      status:     "approved",
+      status:     "approved"
     });
 
     if (!request) {
@@ -411,6 +468,15 @@ const downloadFile = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: "Your access window has expired. Please request access again.",
+      });
+    }
+
+    // -- 2b. Access-type gate: only "download" type can download the file
+    // "read-only" means metadata/preview access only
+    if (request.accessType && request.accessType !== "download") {
+      return res.status(403).json({
+        success: false,
+        message: `Download is not permitted — your access type is "${request.accessType}". You need download access.`,
       });
     }
 
@@ -430,42 +496,94 @@ const downloadFile = async (req, res) => {
       }
     }
 
-    // -- 4. Fetch encrypted bytes from Azure
-    console.log(`[Download] Fetching encrypted file from Azure: ${file.azureBlobName}`);
-    const encryptedBuffer = await downloadBlobToBuffer(file.azureBlobName);
-
-    // -- 5. Handle non-encrypted files (legacy)
-    if (!file.isEncrypted || !file.encryptionIv) {
-      console.warn(`[Download] File ${fileId} is not encrypted — serving raw bytes`);
-      res.setHeader("Content-Disposition", `attachment; filename="${file.originalName}"`);
-      res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
-      res.setHeader("Content-Length", encryptedBuffer.length);
-      return res.send(encryptedBuffer);
-    }
-
-    // -- 6. Retrieve AES key from Azure Key Vault
-    console.log(`[Download] Retrieving AES key from Key Vault for file: ${fileId}`);
+    // -- 4. Retrieve AES key FIRST (fast Key Vault call, done before heavy I/O)
+    console.log(`[Download] Retrieving AES key from Key Vault: ${fileId}`);
     const aesKeyHex = await retrieveEncryptionKey(String(file._id));
 
-    // -- 7. Decrypt in-memory
-    console.log(`[Download] Decrypting file: ${file.originalName}`);
-    const decryptedBuffer = decryptBuffer(encryptedBuffer, aesKeyHex, file.encryptionIv);
+    // -- 5. Open a readable stream from Azure (no buffer — data flows as it arrives)
+    console.log(`[Download] Opening Azure stream: ${file.azureBlobName}`);
+    const azureStream = await getReadableBlobStream(file.azureBlobName);
 
-    // ── 7. Stream decrypted bytes to researcher ────────────────
-    // DO NOT save decryptedBuffer anywhere — send and discard
+    // -- 6. Send headers — do NOT set Content-Length when streaming AES-CBC
+    // AES-CBC strips PKCS7 padding on final block, so decrypted size != sizeBytes exactly.
+    // Setting a wrong Content-Length causes browsers to truncate or error the download.
+    // Without Content-Length the browser uses Transfer-Encoding: chunked automatically.
     res.setHeader("Content-Disposition", `attachment; filename="${file.originalName}"`);
-    res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
-    res.setHeader("Content-Length", decryptedBuffer.length);
-    res.setHeader("X-Encrypted-At-Rest", "true"); // Informational header
+    res.setHeader("Content-Type",         file.mimeType || "application/octet-stream");
+    res.setHeader("X-Encrypted-At-Rest", "true");
 
-    console.log(`[Download] ✅ Sending decrypted file to researcher: ${researcherId}`);
-    return res.send(decryptedBuffer);
+    // -- 7. Handle non-encrypted files (legacy)
+    if (!file.isEncrypted || !file.encryptionIv) {
+      console.warn(`[Download] File not encrypted — piping raw stream`);
+      azureStream.pipe(res);
+      azureStream.on("error", (e) => { console.error("[Download] stream error:", e.message); res.destroy(e); });
+      return;
+    }
 
-    // decryptedBuffer is garbage collected after this — never persisted
+    // -- 8. Create AES-256-CBC decipher Transform stream
+    // Node crypto processes each chunk via .update() — CBC state maintained automatically.
+    // No full-file buffer needed — decrypted bytes flow to browser as Azure sends chunks.
+    const key      = Buffer.from(aesKeyHex, "hex");
+    const iv       = Buffer.from(file.encryptionIv, "hex");
+    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+
+    console.log(`[Download] ✅ Piping Azure → decipher → browser (${file.sizeBytes ? Math.round(file.sizeBytes / 1048576) + " MB" : "?"})`);
+
+    // -- 9. Pipe: Azure → AES-256-CBC decipher → HTTP response
+    // stream.pipeline() manages backpressure + cleanup + error propagation
+    // across all three streams automatically.
+    pipeline(azureStream, decipher, res, (err) => {
+      if (err) {
+        console.error("[Download] Streaming pipeline failed:", err.message);
+        // Headers already sent — can only destroy the socket
+        if (!res.destroyed) res.destroy(err);
+      }
+    });
+
+    // Decrypted bytes flow directly to the TCP socket — never persisted
+    return;
 
   } catch (err) {
     console.error("[downloadFile]", err);
     return res.status(500).json({ success: false, message: "File download failed" });
+  }
+};
+
+/* -----------------------------------------------------------------
+   POST /api/access/request-more-info
+   Protected - owner role only
+
+   Body: { requestId, ownerNote }
+   Sets status to "more-info" and records the owner's note.
+-----------------------------------------------------------------*/
+const requestMoreInfo = async (req, res) => {
+  try {
+    const { requestId, ownerNote } = req.body;
+    const ownerId = req.user.userId;
+
+    const request = await AccessRequest.findById(requestId);
+    if (!request) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+    if (String(request.owner) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+    if (!["pending", "more-info"].includes(request.status)) {
+      return res.status(400).json({ success: false, message: `Cannot request more info — request is already ${request.status}` });
+    }
+
+
+    request.status    = "more-info";
+    request.ownerNote = ownerNote || "";
+    await request.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Researcher notified to provide more information.",
+    });
+  } catch (err) {
+    console.error("[requestMoreInfo]", err);
+    return res.status(500).json({ success: false, message: "Failed to update request" });
   }
 };
 
@@ -514,6 +632,7 @@ module.exports = {
   approveRequest,
   denyRequest,
   revokeRequest,
+  requestMoreInfo,
   verifyPin,
   downloadFile,
   getMyRequests,

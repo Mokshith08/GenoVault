@@ -73,15 +73,16 @@ function AccessCard({ access, token, onExpired }: {
   onExpired: (id: string) => void;
 }) {
   useTick(1000);
-  const [downloading, setDownloading] = useState(false);
+  const [downloading,  setDownloading]  = useState(false);
+  const [dlProgress,   setDlProgress]   = useState(0); // 0-100
 
-  const expiresMs   = access.accessExpiresAt ? new Date(access.accessExpiresAt).getTime() : 0;
-  const approvedMs  = access.approvedAt ? new Date(access.approvedAt).getTime() : expiresMs - 86_400_000;
+  const expiresMs     = access.accessExpiresAt ? new Date(access.accessExpiresAt).getTime() : 0;
+  const approvedMs    = access.approvedAt ? new Date(access.approvedAt).getTime() : expiresMs - 86_400_000;
   const totalDuration = 24 * 3_600_000;
-  const remaining   = expiresMs - Date.now();
-  const elapsed     = totalDuration - remaining;
-  const pct         = Math.max(0, Math.min(100, (elapsed / totalDuration) * 100));
-  const isActive    = remaining > 0;
+  const remaining     = expiresMs - Date.now();
+  const elapsed       = totalDuration - remaining;
+  const pct           = Math.max(0, Math.min(100, (elapsed / totalDuration) * 100));
+  const isActive      = remaining > 0;
 
   // Notify parent when expired so the card can be removed
   useEffect(() => {
@@ -93,26 +94,50 @@ function AccessCard({ access, token, onExpired }: {
   const handleDownload = async () => {
     if (!token || downloading) return;
     setDownloading(true);
+    setDlProgress(0);
     try {
       const res = await fetch(`http://localhost:5000/api/access/download/${access.file._id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || "Download failed");
+        let msg = `Download failed (${res.status})`;
+        try { const d = await res.json(); msg = d.message || msg; } catch {}
+        throw new Error(msg);
       }
-      const blob = await res.blob();
+
+      // ── Streaming download with progress ─────────────────────────────
+      const contentLength = Number(res.headers.get("Content-Length") ?? 0);
+      const reader        = res.body!.getReader();
+      const chunks: Uint8Array[] = [];
+      let   received = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (contentLength > 0) {
+          setDlProgress(Math.round((received / contentLength) * 100));
+        }
+      }
+
+      // Merge chunks → Blob → anchor click
+      const blob = new Blob(chunks);
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       a.href     = url;
       a.download = access.file.originalName;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast.success(`Downloading ${access.file.originalName}`);
+      toast.success(`✅ ${access.file.originalName} downloaded!`);
     } catch (e: any) {
       toast.error(e.message || "Download failed");
     } finally {
       setDownloading(false);
+      setDlProgress(0);
     }
   };
 
@@ -181,16 +206,27 @@ function AccessCard({ access, token, onExpired }: {
 
       {/* Download button */}
       <Button
-        className="w-full"
+        className="w-full relative overflow-hidden"
         size="sm"
         disabled={!isActive || downloading}
         onClick={handleDownload}
       >
-        {downloading ? (
-          <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Downloading…</>
-        ) : (
-          <><Download className="h-4 w-4 mr-2" />Download File</>
+        {/* Progress fill behind text */}
+        {downloading && dlProgress > 0 && (
+          <span
+            className="absolute inset-0 bg-emerald-500/30 transition-all duration-300"
+            style={{ width: `${dlProgress}%` }}
+          />
         )}
+        <span className="relative flex items-center justify-center gap-2">
+          {downloading ? (
+            <><Loader2 className="h-4 w-4 animate-spin" />
+              {dlProgress > 0 ? `Downloading… ${dlProgress}%` : "Preparing…"}
+            </>
+          ) : (
+            <><Download className="h-4 w-4" />Download File</>
+          )}
+        </span>
       </Button>
     </motion.div>
   );
