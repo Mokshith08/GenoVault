@@ -110,15 +110,24 @@ function RequestCard({ req, token }: { req: AccessReq; token: string | null }) {
       const res = await fetch(`http://localhost:5000/api/access/download/${req.file._id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || "Download failed");
+        // Error responses come back as JSON — read them before touching the blob
+        let msg = `Download failed (${res.status})`;
+        try {
+          const errData = await res.json();
+          msg = errData.message || msg;
+        } catch { /* response body wasn't JSON */ }
+        throw new Error(msg);
       }
-      const blob     = await res.blob();
-      const url      = URL.createObjectURL(blob);
-      const a        = document.createElement("a");
-      a.href         = url;
-      a.download     = req.file.originalName;
+
+      const blob = await res.blob();
+      if (blob.size === 0) throw new Error("Received empty file — please try again.");
+
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement("a");
+      a.href      = url;
+      a.download  = req.file.originalName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
