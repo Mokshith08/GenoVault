@@ -9,7 +9,7 @@
  *  • "Request More Info" inline note flow
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Check, X, ShieldCheck, KeyRound,
@@ -79,13 +79,11 @@ const STATUS_META: Record<string, { cls: string; label: string; dot: string }> =
   "more-info":{ cls: "bg-blue-500/15  text-blue-400",    label: "More Info",  dot: "bg-blue-400"    },
 };
 
-// Access-type display metadata — icons are returned from a function (not module-level JSX)
-function getAccessMeta(accessType?: string): { icon: React.ReactNode; label: string; cls: string } {
-  if (accessType === "downloadable" || accessType === "download") {
-    return { icon: <Download className="h-3 w-3" />, label: "Downloadable", cls: "bg-purple-500/15 text-purple-400" };
-  }
-  return { icon: <Lock className="h-3 w-3" />, label: "Read Only", cls: "bg-blue-500/15 text-blue-400" };
-}
+const ACCESS_META: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
+  "read-only":    { icon: <Lock     className="h-3 w-3" />, label: "Read Only",    cls: "bg-blue-500/15   text-blue-400"   },
+  "download":     { icon: <Download className="h-3 w-3" />, label: "Download",     cls: "bg-purple-500/15 text-purple-400" },
+  "downloadable": { icon: <Download className="h-3 w-3" />, label: "Downloadable", cls: "bg-purple-500/15 text-purple-400" },
+};
 
 // ── PIN step ───────────────────────────────────────────────────────────────────
 interface PinStepProps {
@@ -204,7 +202,7 @@ function RequestCard({
   const [note,      setNote]      = useState("");
 
   const status     = STATUS_META[req.status] ?? STATUS_META.pending;
-  const accessMeta = getAccessMeta(req.accessType);
+  const accessMeta = ACCESS_META[req.accessType ?? "read-only"] ?? ACCESS_META["read-only"];
 
   const isExpired  = req.accessExpiresAt
     ? new Date(req.accessExpiresAt).getTime() <= Date.now()
@@ -631,12 +629,10 @@ const Requests = () => {
 
   // ── Filter ─────────────────────────────────────────────────────────────────
   const filtered = incoming.filter(r => {
-    // Guard: skip any request with null file/researcher (deleted docs)
-    if (!r.file || !r.researcher) return false;
     const q = searchIn.toLowerCase();
     const matchSearch = !q
-      || (r.researcher.name  ?? "").toLowerCase().includes(q)
-      || (r.file.originalName ?? "").toLowerCase().includes(q)
+      || r.researcher.name.toLowerCase().includes(q)
+      || r.file.originalName.toLowerCase().includes(q)
       || (r.projectTitle ?? "").toLowerCase().includes(q)
       || (r.institution  ?? "").toLowerCase().includes(q);
     const matchStatus = statusFilter === "all" || r.status === statusFilter;
