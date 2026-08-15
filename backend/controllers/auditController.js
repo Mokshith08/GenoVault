@@ -1,5 +1,6 @@
 const AccessRequest = require('../models/AccessRequest');
 const GenomicFile   = require('../models/GenomicFile');
+const AuditLog      = require('../models/AuditLog');
 
 const getAudit = async (req, res) => {
   try {
@@ -190,8 +191,71 @@ const getAudit = async (req, res) => {
         }
       }
     }
+    // ── Unit 6: merge persistent AuditLog events (downloads & integrity checks) ────
+    // These events are written by auditLogService (non-blocking) during the
+    // download pipeline. We fetch them here and map them to the same shape
+    // as the blockchain events above, so the frontend Audit.tsx needs no changes.
+    try {
+      // For owner: find all files they own, then fetch AuditLog events for those files
+      // For researcher: fetch AuditLog events where they are the actor
+      let persistedEvents = [];
+      if (role === 'owner') {
+        const ownerFiles = await GenomicFile.find({ owner: userId }).select('_id originalName blockchainFileId').lean();
+        const fileIdMap  = {};
+        ownerFiles.forEach(f => { fileIdMap[String(f._id)] = f; });
+        const fileIds    = ownerFiles.map(f => f._id);
 
-    // Sort newest first
+        persistedEvents = await AuditLog.find({ fileId: { $in: fileIds } })
+          .sort({ timestamp: -1 })
+          .limit(200)
+          .populate('userId', 'name')
+          .lean();
+
+        for (const e of persistedEvents) {
+          const fileDoc = e.fileId ? fileIdMap[String(e.fileId)] : null;
+          events.push({
+            eventType:   e.operation,
+            action:      _operationToAction(e.operation),
+            fileId:      fileDoc?.blockchainFileId ?? null,
+            fileName:    fileDoc?.originalName ?? 'Unknown file',
+            actor:       e.userId?.name ?? 'Researcher',
+            txHash:      e.txHash   ?? null,
+            blockNumber: e.blockNumber ?? null,
+            etherscanUrl: e.txHash ? 'https://sepolia.etherscan.io/tx/' + e.txHash : null,
+            timestamp:   e.timestamp,
+            gasUsed:     null,
+            details:     e.details ?? {},
+            status:      e.status,
+          });
+        }
+      } else {
+        persistedEvents = await AuditLog.find({ userId })
+          .sort({ timestamp: -1 })
+          .limit(200)
+          .lean();
+
+        for (const e of persistedEvents) {
+          events.push({
+            eventType:   e.operation,
+            action:      _operationToAction(e.operation),
+            fileId:      null,
+            fileName:    e.details?.fileName ?? 'Unknown file',
+            actor:       'You',
+            txHash:      e.txHash   ?? null,
+            blockNumber: e.blockNumber ?? null,
+            etherscanUrl: e.txHash ? 'https://sepolia.etherscan.io/tx/' + e.txHash : null,
+            timestamp:   e.timestamp,
+            gasUsed:     null,
+            details:     e.details ?? {},
+            status:      e.status,
+          });
+        }
+      }
+    } catch (mergeErr) {
+      // Non-fatal: if AuditLog query fails, return existing blockchain events
+      console.warn('[auditController] Failed to merge AuditLog events:', mergeErr.message);
+    }
+
     events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     return res.status(200).json({ success: true, count: events.length, events });
@@ -200,5 +264,25 @@ const getAudit = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Failed to fetch audit trail' });
   }
 };
+
+/**
+ * _operationToAction — maps AuditLog operation enum to short display string
+ * matching the existing actionMeta keys in Audit.tsx (no frontend changes needed).
+ */
+function _operationToAction(op) {
+  const map = {
+    UPLOAD:             'Upload',
+    ACCESS_REQUEST:     'Request',
+    ACCESS_APPROVED:    'Approve',
+    ACCESS_REJECTED:    'Reject',
+    ACCESS_REVOKED:     'Revoke',
+    DOWNLOAD_INITIATED: 'Download',
+    DOWNLOAD_COMPLETED: 'Download',
+    DOWNLOAD_FAILED:    'Download',
+    INTEGRITY_VERIFIED: 'Verify',
+    INTEGRITY_FAILED:   'Verify',
+  };
+  return map[op] ?? op;
+}
 
 module.exports = { getAudit };
