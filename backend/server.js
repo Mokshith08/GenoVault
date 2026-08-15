@@ -16,6 +16,7 @@ const fileRoutes        = require("./routes/fileRoutes");
 const accessRoutes      = require("./routes/accessRoutes");
 const blockchainRoutes  = require("./routes/blockchainRoutes");
 const auditRoutes       = require("./routes/auditRoutes");
+const integrityRoutes   = require("./routes/integrityRoutes");
 
 
 // ─────────────────────────────────────────────────────────────
@@ -60,16 +61,26 @@ app.use(
   })
 );
 
-// ── 3. Rate limiting (applies to all /api/* routes) ──────────
+// ── 3. Rate limiting ─────────────────────────────────────────
+// Global limiter — covers all /api/* routes
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,                  // Max 100 requests per window per IP
+  max: 300,                  // Raised from 100 — dashboard pages make many read calls
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
     message: "Too many requests from this IP. Please try again in 15 minutes.",
   },
+});
+
+// Permissive limiter for read-only dashboard data endpoints (audit, integrity, files)
+const dashboardLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,                  // Heavy dashboard pages poll these frequently
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many dashboard requests. Please wait." },
 });
 
 // Stricter limiter for auth endpoints (prevent brute force)
@@ -108,8 +119,12 @@ if (process.env.NODE_ENV === "development") {
 
 // ── 6. Apply rate limiters ────────────────────────────────────
 app.use("/api/", apiLimiter);
-app.use("/api/auth/login", authLimiter);
-app.use("/api/auth/register", authLimiter);
+app.use("/api/audit",      dashboardLimiter); // Dashboard polls frequently — relax
+app.use("/api/integrity",  dashboardLimiter); // Same reason
+app.use("/api/files",      dashboardLimiter);
+app.use("/api/access",     dashboardLimiter);
+app.use("/api/auth/login",      authLimiter);
+app.use("/api/auth/register",   authLimiter);
 app.use("/api/auth/verify-mfa", mfaLimiter); // Strict – brute-force guard
 
 // ── 7. Routes ─────────────────────────────────────────────────
@@ -119,16 +134,75 @@ app.use("/api/files",      fileRoutes);
 app.use("/api/access",     accessRoutes);
 app.use("/api/blockchain", blockchainRoutes); // Ethereum integration
 app.use("/api/audit",      auditRoutes);      // Unified blockchain audit trail
+app.use("/api/integrity",  integrityRoutes);  // Unit 6 – file integrity & dashboard
 
-// Health check (useful for deployment / monitoring)
-app.get("/api/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "GenoVault API is running",
+// Health check — live system status for the Vault Status widget
+app.get("/api/health", async (req, res) => {
+  const checks = {};
+
+  // 1. Azure Blob Storage — check if connection string is set and container exists
+  try {
+    const { BlobServiceClient } = require("@azure/storage-blob");
+    const connStr = process.env.AZURE_STORAGE_CONNECTION_STRING;
+    if (!connStr) throw new Error("No connection string");
+    const blobClient = BlobServiceClient.fromConnectionString(connStr);
+    const containerClient = blobClient.getContainerClient(process.env.AZURE_CONTAINER_NAME || "genomic-files");
+    const exists = await containerClient.exists();
+    checks.azure = { status: exists ? "ok" : "degraded", label: "Azure Blob Storage", detail: exists ? "Container reachable" : "Container not found" };
+  } catch (e) {
+    checks.azure = { status: "error", label: "Azure Blob Storage", detail: e.message };
+  }
+
+  // 2. IPFS / Filebase — check if credentials are configured
+  try {
+    const key    = process.env.FILEBASE_ACCESS_KEY_ID     || process.env.IPFS_API_KEY;
+    const secret = process.env.FILEBASE_SECRET_ACCESS_KEY || process.env.IPFS_API_SECRET;
+    const bucket = process.env.FILEBASE_BUCKET_NAME       || process.env.IPFS_BUCKET;
+    if (!key || !secret || !bucket) throw new Error("Credentials not configured");
+    checks.ipfs = { status: "ok", label: "Filebase IPFS", detail: `Bucket: ${bucket}` };
+  } catch (e) {
+    checks.ipfs = { status: "error", label: "Filebase IPFS", detail: e.message };
+  }
+
+  // 3. JWT — verify secret is set and has minimum length
+  try {
+    const secret = process.env.JWT_SECRET || process.env.JWT_ACCESS_SECRET;
+    if (!secret || secret.length < 16) throw new Error("JWT secret not configured or too short");
+    checks.jwt = { status: "ok", label: "JWT Auth", detail: "Secret configured" };
+  } catch (e) {
+    checks.jwt = { status: "error", label: "JWT Auth", detail: e.message };
+  }
+
+  // 4. TOTP / MFA — check if TOTP encryption key is set
+  try {
+    const key = process.env.TOTP_ENCRYPTION_KEY || process.env.MFA_SECRET;
+    if (!key) throw new Error("TOTP encryption key not configured");
+    checks.mfa = { status: "ok", label: "TOTP MFA", detail: "Encryption key set" };
+  } catch (e) {
+    checks.mfa = { status: "error", label: "TOTP MFA", detail: e.message };
+  }
+
+  // 5. MongoDB — already connected if we're here (mongoose connection state)
+  try {
+    const mongoose = require("mongoose");
+    const state = mongoose.connection.readyState; // 1 = connected
+    checks.mongodb = { status: state === 1 ? "ok" : "error", label: "MongoDB Atlas", detail: state === 1 ? "Connected" : "Disconnected" };
+  } catch (e) {
+    checks.mongodb = { status: "error", label: "MongoDB Atlas", detail: e.message };
+  }
+
+  const allOk   = Object.values(checks).every(c => c.status === "ok");
+  const anyError = Object.values(checks).some(c => c.status === "error");
+  const overall = allOk ? "secure" : anyError ? "error" : "degraded";
+
+  return res.status(200).json({
+    success:   true,
+    overall,
+    checks,
     timestamp: new Date().toISOString(),
-    // Note: environment is intentionally omitted to avoid information disclosure
   });
 });
+
 
 // ── 8. 404 handler ────────────────────────────────────────────
 app.use((req, res) => {
