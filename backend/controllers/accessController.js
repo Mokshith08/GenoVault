@@ -26,6 +26,7 @@ const GenomicFile    = require("../models/GenomicFile");
 const AccessRequest  = require("../models/AccessRequest");
 const { retrieveEncryptionKey, retrievePinHash } = require("../services/keyVaultService");
 const { getReadableBlobStream }                  = require("../services/azureService");
+const { logEvent }                               = require("../services/auditLogService");
 
 const {
   requestAccess:   blockchainRequestAccess,
@@ -496,12 +497,89 @@ const downloadFile = async (req, res) => {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // PASS 1 — SHA-256 Integrity Verification (Unit 6, Module 1)
+    // ═══════════════════════════════════════════════════════════════════
+    // Log that the researcher initiated a download attempt.
+    logEvent("DOWNLOAD_INITIATED", researcherId, "researcher", file, {
+      status:    "success",
+      ipAddress: req.ip,
+      details:   { fileId: String(file._id), fileName: file.originalName },
+    }).catch(console.warn);
+
+    // Only verify if the file has a trusted blockchain hash.
+    // (Files uploaded before Unit 6 may not have blockchainFileHash set.)
+    if (file.blockchainFileHash) {
+      console.log(`[Integrity] ⏳ Pass 1 — streaming SHA-256 check for: ${file.azureBlobName}`);
+
+      // Open a fresh Azure stream for hash calculation only (Pass 1).
+      // getReadableBlobStream() opens a new independent HTTP GET each call.
+      // Memory usage = O(chunk_size), never O(file_size).
+      const hashStream = await getReadableBlobStream(file.azureBlobName);
+      const hashCalc   = crypto.createHash("sha256");
+
+      await new Promise((resolve, reject) => {
+        hashStream.on("data",  (chunk) => hashCalc.update(chunk));
+        hashStream.on("end",   resolve);
+        hashStream.on("error", reject);
+      });
+
+      const liveHash   = hashCalc.digest("hex");
+      const storedHash = file.blockchainFileHash;
+
+      if (liveHash !== storedHash) {
+        // ── Integrity check FAILED ─────────────────────────────────
+        console.error(`[Integrity] ❌ SHA-256 MISMATCH for file ${fileId}`);
+        console.error(`[Integrity]    stored: ${storedHash}`);
+        console.error(`[Integrity]    live  : ${liveHash}`);
+
+        // Log both INTEGRITY_FAILED and DOWNLOAD_FAILED (non-blocking)
+        logEvent("INTEGRITY_FAILED", researcherId, "researcher", file, {
+          status:    "failure",
+          ipAddress: req.ip,
+          details:   {
+            reason:     "SHA-256 mismatch — file may have been tampered",
+            storedHash,
+            liveHash,
+          },
+        }).catch(console.warn);
+
+        logEvent("DOWNLOAD_FAILED", researcherId, "researcher", file, {
+          status:    "failure",
+          ipAddress: req.ip,
+          details:   { reason: "Blocked by integrity check (SHA-256 mismatch)" },
+        }).catch(console.warn);
+
+        return res.status(409).json({
+          success: false,
+          message: "File integrity verification failed. The file may have been tampered with. Download blocked.",
+          code:    "INTEGRITY_FAILED",
+        });
+      }
+
+      // ── Integrity check PASSED ──────────────────────────────────
+      console.log(`[Integrity] ✅ SHA-256 verified for file ${fileId}`);
+      logEvent("INTEGRITY_VERIFIED", researcherId, "researcher", file, {
+        status:    "success",
+        ipAddress: req.ip,
+        details:   { storedHash, liveHash, match: true },
+      }).catch(console.warn);
+    } else {
+      console.warn(`[Integrity] ⚠️  Skipping SHA-256 check — no blockchainFileHash stored for file ${fileId}`);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PASS 2 — Existing Streaming Download Pipeline (unchanged)
+    // ═══════════════════════════════════════════════════════════════════
+
     // -- 4. Retrieve AES key FIRST (fast Key Vault call, done before heavy I/O)
     console.log(`[Download] Retrieving AES key from Key Vault: ${fileId}`);
     const aesKeyHex = await retrieveEncryptionKey(String(file._id));
 
-    // -- 5. Open a readable stream from Azure (no buffer — data flows as it arrives)
-    console.log(`[Download] Opening Azure stream: ${file.azureBlobName}`);
+    // -- 5. Open a FRESH readable stream from Azure (independent of Pass 1 stream).
+    // Each call to getReadableBlobStream() opens a new HTTP GET from byte 0.
+    // No buffer, no shared state with the hash stream above.
+    console.log(`[Download] Opening Azure stream (Pass 2): ${file.azureBlobName}`);
     const azureStream = await getReadableBlobStream(file.azureBlobName);
 
     // -- 6. Send headers — do NOT set Content-Length when streaming AES-CBC
@@ -516,7 +594,13 @@ const downloadFile = async (req, res) => {
     if (!file.isEncrypted || !file.encryptionIv) {
       console.warn(`[Download] File not encrypted — piping raw stream`);
       azureStream.pipe(res);
-      azureStream.on("error", (e) => { console.error("[Download] stream error:", e.message); res.destroy(e); });
+      azureStream.on("error", (e) => {
+        console.error("[Download] stream error:", e.message);
+        logEvent("DOWNLOAD_FAILED", researcherId, "researcher", file, {
+          status: "failure", ipAddress: req.ip, details: { reason: e.message },
+        }).catch(console.warn);
+        res.destroy(e);
+      });
       return;
     }
 
@@ -535,8 +619,19 @@ const downloadFile = async (req, res) => {
     pipeline(azureStream, decipher, res, (err) => {
       if (err) {
         console.error("[Download] Streaming pipeline failed:", err.message);
+        // Log download failure (non-blocking; headers already sent so we can't send JSON)
+        logEvent("DOWNLOAD_FAILED", researcherId, "researcher", file, {
+          status: "failure", ipAddress: req.ip, details: { reason: err.message },
+        }).catch(console.warn);
         // Headers already sent — can only destroy the socket
         if (!res.destroyed) res.destroy(err);
+      } else {
+        // Pipeline completed without error — file delivered
+        logEvent("DOWNLOAD_COMPLETED", researcherId, "researcher", file, {
+          status:    "success",
+          ipAddress: req.ip,
+          details:   { fileName: file.originalName, sizeBytes: file.sizeBytes },
+        }).catch(console.warn);
       }
     });
 
