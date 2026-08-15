@@ -1,205 +1,223 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { ShieldCheck, ShieldAlert, FileCheck2, Loader2, FileText, RefreshCw, Dna } from "lucide-react";
-import { PageHeader } from "@/components/dashboard/PageHeader";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { useAuth } from "@/contexts/AuthContext";
+import {
+  ShieldCheck, ShieldAlert, FileText, RefreshCw, Dna,
+  Loader2, CheckCircle2, XCircle, Clock, ExternalLink,
+} from "lucide-react";
+import { PageHeader }   from "@/components/dashboard/PageHeader";
+import { Card }         from "@/components/ui/card";
+import { Button }       from "@/components/ui/button";
+import { Badge }        from "@/components/ui/badge";
+import { useAuth }      from "@/contexts/AuthContext";
 
 const API_BASE = "http://localhost:5000/api";
 
-interface VerifiableFile {
+interface LayerResult {
+  status: "PASS" | "FAIL" | "SKIP" | "PENDING";
+  reason?: string;
+  error?:  string;
+  note?:   string;
+  etherscanUrl?: string;
+  txHash?:       string | number | null;
+  blockNumber?:  string | number | null;
+  registeredAt?: string | null;
+  [key: string]: unknown;
+}
+
+interface IntegrityResult {
+  fileId:    string;
+  fileName:  string;
+  datasetId: string | null;
+  checks: {
+    sha256:     LayerResult;
+    blockchain: LayerResult;
+    aes:        LayerResult;
+    azure:      LayerResult;
+    ipfs:       LayerResult;
+  };
+  overall:   "SECURE" | "AT_RISK";
+  checkedAt: string;
+}
+
+interface SimpleFile {
   _id:          string;
   originalName: string;
   sizeBytes:    number;
-  cloudUrl:     string;
-  ipfsCid:      string | null;
   createdAt:    string;
+  datasetId?:   string | null;
 }
 
-const formatBytes = (bytes: number): string => {
-  if (bytes >= 1e9) return (bytes / 1e9).toFixed(2) + " GB";
-  if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + " MB";
-  if (bytes >= 1e3) return (bytes / 1e3).toFixed(0) + " KB";
-  return bytes + " B";
+const formatBytes = (b: number) => {
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+  if (b >= 1e3) return (b / 1e3).toFixed(0) + " KB";
+  return b + " B";
+};
+
+const LayerBadge = ({ name, result }: { name: string; result?: LayerResult }) => {
+  if (!result) return null;
+  const { status, reason, note, error } = result;
+  const tooltip = reason ?? error ?? note ?? "";
+  const cls =
+    status === "PASS"    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" :
+    status === "FAIL"    ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" :
+    status === "PENDING" ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" :
+                           "bg-muted text-muted-foreground";
+  const Icon = status === "PASS" ? CheckCircle2 : status === "FAIL" ? XCircle : Clock;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`} title={tooltip}>
+      <Icon className="h-3 w-3 shrink-0" />{name}
+    </span>
+  );
 };
 
 const Verification = () => {
   const { token = "" } = useAuth();
-  const [files, setFiles]         = useState<VerifiableFile[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [verifying, setVerifying] = useState<string | null>(null);
-  // Results: fileId → true (verified) | false (tampered)
-  const [results, setResults]     = useState<Record<string, boolean>>({});
+  const [files,    setFiles]    = useState<SimpleFile[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [results,  setResults]  = useState<Record<string, IntegrityResult>>({});
+  const [checking, setChecking] = useState<Record<string, boolean>>({});
 
-  /* ── Fetch real files from backend ─────────────────────────── */
   const fetchFiles = useCallback(async () => {
     if (!token) { setLoading(false); return; }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/files/my-files`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res  = await fetch(`${API_BASE}/files/my-files`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
-      if (res.ok) {
-        const loaded: VerifiableFile[] = data.files || [];
-        setFiles(loaded);
-        // Default: files with IPFS backup done are "verified"
-        const initial: Record<string, boolean> = {};
-        loaded.forEach(f => {
-          initial[f._id] = f.ipfsCid !== null;
-        });
-        setResults(initial);
-      }
-    } catch {
-      /* ignore */
-    } finally {
-      setLoading(false);
-    }
+      if (res.ok) setFiles(data.files ?? []);
+    } catch { /* ignore */ } finally { setLoading(false); }
   }, [token]);
 
   useEffect(() => { fetchFiles(); }, [fetchFiles]);
 
-  /* ── Re-verify: check if IPFS CID still exists ─────────────── */
-  const verify = async (id: string) => {
-    setVerifying(id);
+  const checkFile = useCallback(async (fileId: string) => {
+    setChecking(c => ({ ...c, [fileId]: true }));
     try {
-      const res = await fetch(`${API_BASE}/files/${id}/ipfs-status`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res  = await fetch(`${API_BASE}/integrity/${fileId}`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
-      // "done" = CID pinned on IPFS = file is intact
-      setResults(r => ({ ...r, [id]: data.ipfsStatus === "done" }));
-    } catch {
-      setResults(r => ({ ...r, [id]: false }));
-    } finally {
-      setVerifying(null);
-    }
-  };
+      if (res.ok && data.success) setResults(r => ({ ...r, [fileId]: data as IntegrityResult }));
+    } catch { /* ignore */ } finally { setChecking(c => ({ ...c, [fileId]: false })); }
+  }, [token]);
 
-  const verifiedCount = Object.values(results).filter(Boolean).length;
-  const tamperedCount = Object.values(results).filter(v => !v).length;
+  useEffect(() => {
+    if (!token || files.length === 0) return;
+    files.forEach(f => checkFile(f._id));
+  }, [token, files, checkFile]);
+
+  const secureCount = Object.values(results).filter(r => r.overall === "SECURE").length;
+  const atRiskCount = Object.values(results).filter(r => r.overall === "AT_RISK").length;
 
   return (
     <>
-      <PageHeader
-        title="Data Verification"
-        description="Verify file integrity against IPFS CID records to detect tampering."
-      />
+      <PageHeader title="Data Verification" description="5-layer integrity check: SHA-256 · Blockchain · AES · Azure · IPFS" />
 
-      {/* Stats row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <Card className="p-5 shadow-card">
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-xl bg-success text-success-foreground flex items-center justify-center">
-              <ShieldCheck className="h-5 w-5" />
+        {[
+          { label: "Secure",      value: secureCount,  color: "bg-emerald-500/10 text-emerald-600", icon: ShieldCheck },
+          { label: "At Risk",     value: atRiskCount,  color: "bg-destructive/10 text-destructive",  icon: ShieldAlert },
+          { label: "Total Files", value: files.length, color: "bg-primary/10 text-primary",          icon: FileText },
+        ].map(({ label, value, color, icon: Icon }) => (
+          <Card key={label} className="p-5 shadow-card">
+            <div className="flex items-center gap-3">
+              <div className={`h-11 w-11 rounded-xl flex items-center justify-center ${color}`}><Icon className="h-5 w-5" /></div>
+              <div><p className="text-xs text-muted-foreground">{label}</p><p className="text-2xl font-bold">{value}</p></div>
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Verified</p>
-              <p className="text-2xl font-bold">{verifiedCount}</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-5 shadow-card">
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-xl bg-destructive text-destructive-foreground flex items-center justify-center">
-              <ShieldAlert className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Not verified</p>
-              <p className="text-2xl font-bold">{tamperedCount}</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-5 shadow-card">
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-xl bg-gradient-primary text-primary-foreground flex items-center justify-center">
-              <FileCheck2 className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Total files</p>
-              <p className="text-2xl font-bold">{files.length}</p>
-            </div>
-          </div>
-        </Card>
+          </Card>
+        ))}
       </div>
 
-      {/* File list */}
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
-        </div>
+        <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 text-muted-foreground animate-spin" /></div>
       ) : files.length === 0 ? (
         <Card className="p-10 text-center text-muted-foreground">
           <Dna className="h-10 w-10 mx-auto mb-3 opacity-30" />
           <p className="text-sm">No files uploaded yet.</p>
-          <p className="text-xs mt-1">Upload a genomic file to enable verification.</p>
-          <Button variant="ghost" size="sm" className="mt-3" onClick={fetchFiles}>
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Refresh
-          </Button>
+          <Button variant="ghost" size="sm" className="mt-3" onClick={fetchFiles}><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Refresh</Button>
         </Card>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {files.map((f, i) => {
-            const ok = results[f._id] ?? false;
-            const isChecking = verifying === f._id;
-
+            const result     = results[f._id];
+            const isChecking = checking[f._id] ?? false;
+            const overall    = result?.overall;
+            const borderCls  = !result ? "border-l-muted-foreground/30" : overall === "SECURE" ? "border-l-emerald-500" : "border-l-destructive";
             return (
-              <motion.div
-                key={f._id}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
-              >
-                <Card className={`p-5 shadow-card border-l-4 ${ok ? "border-l-success" : "border-l-destructive"}`}>
-                  <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-                    {/* File info */}
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="h-10 w-10 rounded-lg bg-accent text-accent-foreground flex items-center justify-center shrink-0">
-                        <FileText className="h-4 w-4" />
-                      </div>
+              <motion.div key={f._id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
+                <Card className={`p-5 shadow-card border-l-4 ${borderCls}`}>
+                  {/* Header */}
+                  <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-10 w-10 rounded-lg bg-accent flex items-center justify-center shrink-0"><FileText className="h-4 w-4" /></div>
                       <div className="min-w-0">
                         <p className="font-medium truncate">{f.originalName}</p>
                         <p className="text-xs text-muted-foreground">
                           {formatBytes(f.sizeBytes)} · {new Date(f.createdAt).toLocaleDateString()}
+                          {f.datasetId && <span className="ml-2 font-mono">{f.datasetId}</span>}
                         </p>
                       </div>
                     </div>
-
-                    {/* Hash / CID panel */}
-                    <div className="flex-1 grid grid-cols-1 gap-2 text-xs">
-                      <div className="rounded-lg bg-muted/50 p-2.5">
-                        <p className="text-muted-foreground mb-0.5">IPFS CID (backup fingerprint)</p>
-                        <p className="font-mono truncate">
-                          {f.ipfsCid ? f.ipfsCid : "Not yet backed up to IPFS"}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Badge + re-verify */}
-                    <div className="flex items-center gap-2">
-                      <Badge className={ok ? "bg-success text-success-foreground" : "bg-destructive text-destructive-foreground"}>
-                        {ok
-                          ? <><ShieldCheck className="h-3 w-3 mr-1" />Verified</>
-                          : <><ShieldAlert className="h-3 w-3 mr-1" />Pending</>
-                        }
-                      </Badge>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => verify(f._id)}
-                        disabled={isChecking}
-                      >
-                        {isChecking
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <><RefreshCw className="h-3.5 w-3.5 mr-1" />Re-verify</>
-                        }
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isChecking && <Badge variant="secondary" className="gap-1"><Loader2 className="h-3 w-3 animate-spin" />Checking…</Badge>}
+                      {!isChecking && overall && (
+                        <Badge className={overall === "SECURE" ? "bg-emerald-500 text-white hover:bg-emerald-600" : "bg-destructive text-destructive-foreground"}>
+                          {overall === "SECURE" ? <><ShieldCheck className="h-3 w-3 mr-1" />SECURE</> : <><ShieldAlert className="h-3 w-3 mr-1" />AT RISK</>}
+                        </Badge>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => checkFile(f._id)} disabled={isChecking}>
+                        <RefreshCw className={`h-3.5 w-3.5 mr-1 ${isChecking ? "animate-spin" : ""}`} />Re-verify
                       </Button>
                     </div>
                   </div>
+
+                  {/* Layer pills */}
+                  {result && (
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <LayerBadge name="SHA-256"    result={result.checks.sha256} />
+                      <LayerBadge name="Blockchain" result={result.checks.blockchain} />
+                      <LayerBadge name="AES-256"    result={result.checks.aes} />
+                      <LayerBadge name="Azure"      result={result.checks.azure} />
+                      <LayerBadge name="IPFS"       result={result.checks.ipfs} />
+                    </div>
+                  )}
+
+                  {/* Blockchain panel */}
+                  {result?.checks.blockchain.status === "PASS" && (
+                    <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs flex flex-wrap gap-x-6 gap-y-1">
+                      {result.checks.blockchain.txHash && (
+                        <span>
+                          <span className="text-muted-foreground">Tx: </span>
+                          <span className="font-mono">{String(result.checks.blockchain.txHash).slice(0, 18)}…</span>
+                          {result.checks.blockchain.etherscanUrl && (
+                            <a href={String(result.checks.blockchain.etherscanUrl)} target="_blank" rel="noopener noreferrer"
+                              className="ml-1 text-primary hover:underline inline-flex items-center gap-0.5">
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
+                        </span>
+                      )}
+                      {result.checks.blockchain.blockNumber && (
+                        <span><span className="text-muted-foreground">Block: </span>{Number(result.checks.blockchain.blockNumber).toLocaleString()}</span>
+                      )}
+                      <span><span className="text-muted-foreground">Network: </span>Ethereum Sepolia</span>
+                      {result.checks.blockchain.registeredAt && (
+                        <span><span className="text-muted-foreground">Registered: </span>{new Date(String(result.checks.blockchain.registeredAt)).toLocaleDateString()}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Fail reasons */}
+                  {result && Object.entries(result.checks).some(([, v]) => v.status === "FAIL") && (
+                    <div className="mt-2 rounded-lg bg-destructive/5 border border-destructive/20 px-3 py-2 text-xs space-y-1">
+                      {Object.entries(result.checks).map(([layer, v]) =>
+                        v.status === "FAIL" ? (
+                          <p key={layer} className="text-destructive">
+                            <span className="font-semibold capitalize">{layer}: </span>
+                            {v.reason ?? v.error ?? "Check failed"}
+                          </p>
+                        ) : null
+                      )}
+                    </div>
+                  )}
                 </Card>
               </motion.div>
             );
@@ -211,3 +229,4 @@ const Verification = () => {
 };
 
 export default Verification;
+
