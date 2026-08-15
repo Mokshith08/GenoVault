@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   FileText, Inbox, ShieldCheck, Activity,
   TrendingUp, Database, FlaskConical, ArrowRight, Loader2,
+  CheckCircle2, XCircle, AlertCircle,
 } from "lucide-react";
 import { PageHeader }  from "@/components/dashboard/PageHeader";
 import { StatCard }    from "@/components/dashboard/StatCard";
@@ -13,6 +14,11 @@ import { Badge }       from "@/components/ui/badge";
 import { useAuth }     from "@/contexts/AuthContext";
 
 const API_BASE = "http://localhost:5000/api";
+
+// ── Vault status types ───────────────────────────────────────────────────────
+type CheckStatus = "ok" | "degraded" | "error" | "loading";
+interface ServiceCheck { status: CheckStatus; label: string; detail?: string; }
+interface VaultStatus  { overall: "secure" | "degraded" | "error"; checks: Record<string, ServiceCheck>; }
 
 const Overview = () => {
   const { user, token = "" } = useAuth();
@@ -25,6 +31,10 @@ const Overview = () => {
   const [grantCount,   setGrantCount]   = useState<number | null>(null);
   const [auditCount,   setAuditCount]   = useState<number | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
+
+  // Vault status state
+  const [vaultStatus,  setVaultStatus]  = useState<VaultStatus | null>(null);
+  const [vaultLoading, setVaultLoading] = useState(true);
 
   const fetchStats = useCallback(async () => {
     if (!token || !isOwner) { setLoadingStats(false); return; }
@@ -69,6 +79,16 @@ const Overview = () => {
   }, [token, isOwner]);
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
+
+  // Fetch vault health once on mount (no auth needed, no polling)
+  useEffect(() => {
+    setVaultLoading(true);
+    fetch(`${API_BASE}/health`)
+      .then(r => r.json())
+      .then(d => { if (d.success) setVaultStatus(d as VaultStatus); })
+      .catch(() => {})
+      .finally(() => setVaultLoading(false));
+  }, []);
 
   const val = (n: number | null) => (loadingStats ? "…" : String(n ?? 0));
 
@@ -237,14 +257,54 @@ const Overview = () => {
             </div>
 
             <div className="mt-6 pt-6 border-t border-border">
-              <div className="flex items-center gap-2 mb-2">
-                <ShieldCheck className="h-4 w-4 text-success" />
+              <div className="flex items-center gap-2 mb-3">
+                <ShieldCheck className={`h-4 w-4 ${
+                  !vaultStatus ? "text-muted-foreground" :
+                  vaultStatus.overall === "secure"   ? "text-emerald-500" :
+                  vaultStatus.overall === "degraded"  ? "text-amber-500"  : "text-red-500"
+                }`} />
                 <span className="text-sm font-medium">Vault status</span>
+                {vaultLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               </div>
-              <Badge className="bg-success text-success-foreground">All systems secure</Badge>
-              <p className="mt-3 text-xs text-muted-foreground">
-                Azure Blob Storage · Filebase IPFS · JWT auth · TOTP MFA
-              </p>
+
+              {/* Overall badge */}
+              {vaultLoading ? (
+                <div className="h-6 w-28 rounded-full bg-muted animate-pulse" />
+              ) : vaultStatus ? (
+                <Badge className={`mb-3 ${
+                  vaultStatus.overall === "secure"  ? "bg-emerald-500 hover:bg-emerald-600 text-white" :
+                  vaultStatus.overall === "degraded" ? "bg-amber-500  hover:bg-amber-600  text-white" :
+                                                       "bg-red-500    hover:bg-red-600    text-white"
+                }`}>
+                  {vaultStatus.overall === "secure"  ? "All systems secure" :
+                   vaultStatus.overall === "degraded" ? "Partially degraded"  : "System error"}
+                </Badge>
+              ) : (
+                <Badge className="bg-muted text-muted-foreground mb-3">Status unavailable</Badge>
+              )}
+
+              {/* Per-service dots */}
+              {vaultStatus && vaultStatus.checks && (
+                <div className="grid grid-cols-1 gap-1.5">
+                  {Object.values(vaultStatus.checks ?? {}).map((c) => {
+                    const Icon =
+                      c.status === "ok"      ? CheckCircle2 :
+                      c.status === "degraded" ? AlertCircle  : XCircle;
+                    const color =
+                      c.status === "ok"      ? "text-emerald-500" :
+                      c.status === "degraded" ? "text-amber-500"   : "text-red-500";
+                    return (
+                      <div key={c.label} className="flex items-center gap-2" title={c.detail}>
+                        <Icon className={`h-3 w-3 shrink-0 ${color}`} />
+                        <span className="text-xs text-muted-foreground">{c.label}</span>
+                        {c.status !== "ok" && c.detail && (
+                          <span className="text-xs text-red-400 truncate max-w-[120px]">{c.detail}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </Card>
         </motion.div>
