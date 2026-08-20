@@ -24,9 +24,12 @@ const { pipeline }   = require("stream");
 const User           = require("../models/User");
 const GenomicFile    = require("../models/GenomicFile");
 const AccessRequest  = require("../models/AccessRequest");
+const WatermarkRegistry = require("../models/WatermarkRegistry");
 const { retrieveEncryptionKey, retrievePinHash } = require("../services/keyVaultService");
-const { getReadableBlobStream }                  = require("../services/azureService");
+const { getReadableBlobStream, downloadBlobToBuffer } = require("../services/azureService");
 const { logEvent }                               = require("../services/auditLogService");
+const { registerFile: registerFileOnChain, isBlockchainConfigured } = require("../services/blockchainService");
+const wmService = require("../services/watermarkService");
 
 const {
   requestAccess:   blockchainRequestAccess,
@@ -34,7 +37,6 @@ const {
   rejectAccess:    blockchainRejectAccess,
   revokeAccess:    blockchainRevokeAccess,
   checkAccess:     blockchainCheckAccess,
-  isBlockchainConfigured,
 } = require("../services/blockchainService");
 
 const ACCESS_GRANT_HOURS = parseInt(process.env.ACCESS_GRANT_HOURS) || 24;
@@ -569,80 +571,207 @@ const downloadFile = async (req, res) => {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // PASS 2 — Existing Streaming Download Pipeline (unchanged)
+    // WATERMARK GUARD — fail-safe before any file data is prepared
     // ═══════════════════════════════════════════════════════════════════
 
-    // -- 4. Retrieve AES key FIRST (fast Key Vault call, done before heavy I/O)
+    // Guard: WATERMARK_SECRET must be configured or download is blocked
+    if (!process.env.WATERMARK_SECRET) {
+      logEvent("WATERMARK_EMBEDDING_FAILED", researcherId, "researcher", file, {
+        status: "failure", ipAddress: req.ip,
+        details: { reason: "WATERMARK_SECRET not configured" },
+      }).catch(console.warn);
+      return res.status(503).json({
+        success: false,
+        message: "Download service temporarily unavailable — watermarking not configured.",
+        code:    "WATERMARK_SECRET_MISSING",
+      });
+    }
+
+    // Guard: file size limit (V1 in-memory buffer limit)
+    const wmMaxMB  = parseInt(process.env.WM_MAX_FILE_SIZE_MB) || 500;
+    const fileSizeMB = (file.sizeBytes || 0) / (1024 * 1024);
+    if (fileSizeMB > wmMaxMB) {
+      logEvent("WATERMARK_FAILED_SIZE_LIMIT", researcherId, "researcher", file, {
+        status: "failure", ipAddress: req.ip,
+        details: { reason: `File ${fileSizeMB.toFixed(1)} MB exceeds WM limit ${wmMaxMB} MB` },
+      }).catch(console.warn);
+      return res.status(503).json({
+        success: false,
+        message: `File exceeds V1 watermarking size limit (${wmMaxMB} MB). Download blocked.`,
+        code:    "FILE_TOO_LARGE_FOR_WATERMARKING",
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PASS 2 — In-Memory Decryption (required for watermark embedding)
+    // ═══════════════════════════════════════════════════════════════════
+
+    // -- 4. Retrieve AES key from Key Vault
     console.log(`[Download] Retrieving AES key from Key Vault: ${fileId}`);
     const aesKeyHex = await retrieveEncryptionKey(String(file._id));
 
-    // -- 5. Open a FRESH readable stream from Azure (independent of Pass 1 stream).
-    // Each call to getReadableBlobStream() opens a new HTTP GET from byte 0.
-    // No buffer, no shared state with the hash stream above.
-    console.log(`[Download] Opening Azure stream (Pass 2): ${file.azureBlobName}`);
-    const azureStream = await getReadableBlobStream(file.azureBlobName);
+    // -- 5. Download encrypted blob to buffer and decrypt
+    console.log(`[Download] Buffering Azure blob for watermarking: ${file.azureBlobName}`);
+    const encryptedBuffer = await downloadBlobToBuffer(file.azureBlobName);
 
-    // -- 6. Send headers — do NOT set Content-Length when streaming AES-CBC
-    // AES-CBC strips PKCS7 padding on final block, so decrypted size != sizeBytes exactly.
-    // Setting a wrong Content-Length causes browsers to truncate or error the download.
-    // Without Content-Length the browser uses Transfer-Encoding: chunked automatically.
-    res.setHeader("Content-Disposition", `attachment; filename="${file.originalName}"`);
-    res.setHeader("Content-Type",         file.mimeType || "application/octet-stream");
-    res.setHeader("X-Encrypted-At-Rest", "true");
-
-    // -- 7. Handle non-encrypted files (legacy)
+    let plainBuffer;
     if (!file.isEncrypted || !file.encryptionIv) {
-      console.warn(`[Download] File not encrypted — piping raw stream`);
-      azureStream.pipe(res);
-      azureStream.on("error", (e) => {
-        console.error("[Download] stream error:", e.message);
-        logEvent("DOWNLOAD_FAILED", researcherId, "researcher", file, {
-          status: "failure", ipAddress: req.ip, details: { reason: e.message },
-        }).catch(console.warn);
-        res.destroy(e);
-      });
-      return;
+      console.warn(`[Download] File not encrypted — using raw buffer`);
+      plainBuffer = encryptedBuffer;
+    } else {
+      const key      = Buffer.from(aesKeyHex, "hex");
+      const iv       = Buffer.from(file.encryptionIv, "hex");
+      const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+      plainBuffer    = Buffer.concat([decipher.update(encryptedBuffer), decipher.final()]);
     }
 
-    // -- 8. Create AES-256-CBC decipher Transform stream
-    // Node crypto processes each chunk via .update() — CBC state maintained automatically.
-    // No full-file buffer needed — decrypted bytes flow to browser as Azure sends chunks.
-    const key      = Buffer.from(aesKeyHex, "hex");
-    const iv       = Buffer.from(file.encryptionIv, "hex");
-    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+    // ═══════════════════════════════════════════════════════════════════
+    // PASS 3 — Watermark Embedding
+    // ═══════════════════════════════════════════════════════════════════
 
-    console.log(`[Download] ✅ Piping Azure → decipher → browser (${file.sizeBytes ? Math.round(file.sizeBytes / 1048576) + " MB" : "?"})`);
+    // -- 6. Generate unique identifiers and seed
+    const downloadId  = wmService.generateDownloadId();
+    const watermarkId = wmService.generateWatermarkId();
+    const nonce       = crypto.randomBytes(32);
+    const ownerId     = String(file.owner);
+    const fileExt     = (file.extension || "").toLowerCase();
 
-    // -- 9. Pipe: Azure → AES-256-CBC decipher → HTTP response
-    // stream.pipeline() manages backpressure + cleanup + error propagation
-    // across all three streams automatically.
-    pipeline(azureStream, decipher, res, (err) => {
-      if (err) {
-        console.error("[Download] Streaming pipeline failed:", err.message);
-        // Log download failure (non-blocking; headers already sent so we can't send JSON)
-        logEvent("DOWNLOAD_FAILED", researcherId, "researcher", file, {
-          status: "failure", ipAddress: req.ip, details: { reason: err.message },
-        }).catch(console.warn);
-        // Headers already sent — can only destroy the socket
-        if (!res.destroyed) res.destroy(err);
-      } else {
-        // Pipeline completed without error — file delivered
-        logEvent("DOWNLOAD_COMPLETED", researcherId, "researcher", file, {
-          status:    "success",
-          ipAddress: req.ip,
-          details:   { fileName: file.originalName, sizeBytes: file.sizeBytes },
-        }).catch(console.warn);
-      }
+    const watermarkSeed = wmService.generateWatermarkSeed(
+      ownerId,
+      String(researcherId),
+      String(file._id),
+      String(request._id),
+      downloadId,
+      nonce
+    );
+
+    // Compute SHA-256 of the original plaintext (pre-watermark)
+    const originalFileHash = crypto.createHash("sha256").update(plainBuffer).digest("hex");
+
+    // Build the watermark record object
+    const watermarkRecord = wmService.buildWatermarkRecord({
+      watermarkId,
+      downloadId,
+      fileId:          String(file._id),
+      ownerId,
+      researcherId:    String(researcherId),
+      accessRequestId: String(request._id),
+      watermarkSeed,
+      fileExt,
+      fileSize:        plainBuffer.length,
+      originalFileHash,
     });
 
-    // Decrypted bytes flow directly to the TCP socket — never persisted
-    return;
+    // -- 7. Embed watermark (dispatch to LSB or metadata embedder)
+    let watermarkedBuffer;
+    try {
+      const embedResult = wmService.embedWatermark(plainBuffer, fileExt, watermarkRecord);
+      watermarkedBuffer = embedResult.watermarkedBuffer;
+    } catch (embedErr) {
+      console.error("[Watermark] Embedding failed:", embedErr.message);
+      logEvent("WATERMARK_EMBEDDING_FAILED", researcherId, "researcher", file, {
+        status: "failure", ipAddress: req.ip,
+        details: { reason: embedErr.message },
+      }).catch(console.warn);
+      return res.status(500).json({
+        success: false,
+        message: "Watermark embedding failed. Download blocked.",
+        code:    "WATERMARK_EMBEDDING_FAILED",
+      });
+    }
+
+    logEvent("WATERMARK_EMBEDDED", researcherId, "researcher", file, {
+      status: "success", ipAddress: req.ip,
+      details: { watermarkId, downloadId, fileExt },
+    }).catch(console.warn);
+
+    // -- 8. Self-verify: confirm watermark can be recovered from output
+    try {
+      const selfTest = wmService.detectWatermarkInCandidate(watermarkedBuffer, watermarkRecord);
+      if (!selfTest.verified) {
+        throw new Error(`Self-test failed: commitment mismatch (matchScore=${selfTest.matchScore.toFixed(3)})`);
+      }
+    } catch (verifyErr) {
+      console.error("[Watermark] Self-verification failed:", verifyErr.message);
+      logEvent("WATERMARK_EMBEDDING_FAILED", researcherId, "researcher", file, {
+        status: "failure", ipAddress: req.ip,
+        details: { reason: `Self-verify: ${verifyErr.message}` },
+      }).catch(console.warn);
+      return res.status(500).json({
+        success: false,
+        message: "Watermark verification failed. Download blocked.",
+        code:    "WATERMARK_VERIFICATION_FAILED",
+      });
+    }
+
+    logEvent("WATERMARK_VERIFIED", researcherId, "researcher", file, {
+      status: "success", ipAddress: req.ip,
+      details: { watermarkId, downloadId },
+    }).catch(console.warn);
+
+    // -- 9. Compute watermarked file hash and save registry record
+    const watermarkedFileHash = wmService.computeWatermarkedFileHash(watermarkedBuffer);
+    watermarkRecord.watermarkedFileHash = watermarkedFileHash;
+
+    let savedRegistry;
+    try {
+      savedRegistry = await WatermarkRegistry.create(watermarkRecord);
+    } catch (saveErr) {
+      console.error("[Watermark] Registry save failed:", saveErr.message);
+      logEvent("WATERMARK_EMBEDDING_FAILED", researcherId, "researcher", file, {
+        status: "failure", ipAddress: req.ip,
+        details: { reason: `Registry save: ${saveErr.message}` },
+      }).catch(console.warn);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to record watermark. Download blocked.",
+        code:    "WATERMARK_REGISTRY_SAVE_FAILED",
+      });
+    }
+
+    // -- 10. Anchor watermarked file hash to blockchain (fire-and-forget)
+    if (isBlockchainConfigured()) {
+      setImmediate(() => {
+        registerFileOnChain(watermarkedFileHash, "")
+          .then(async (bcResult) => {
+            const update = bcResult.success
+              ? { blockchainStatus: "ANCHORED", blockchainTxHash: bcResult.blockchainTxHash, blockchainBlockNum: bcResult.blockchainBlock }
+              : { blockchainStatus: "FAILED" };
+            await WatermarkRegistry.findByIdAndUpdate(savedRegistry._id, update);
+            console.log(`[Watermark] Blockchain anchor ${bcResult.success ? "✅" : "❌"} for ${watermarkId}`);
+          })
+          .catch((e) => {
+            console.warn("[Watermark] Blockchain anchor error (non-blocking):", e.message);
+            WatermarkRegistry.findByIdAndUpdate(savedRegistry._id, { blockchainStatus: "FAILED" }).catch(() => {});
+          });
+      });
+    } else {
+      await WatermarkRegistry.findByIdAndUpdate(savedRegistry._id, { blockchainStatus: "FAILED" });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DELIVER — Send watermarked buffer to researcher
+    // ═══════════════════════════════════════════════════════════════════
+
+    res.setHeader("Content-Disposition", `attachment; filename="${file.originalName}"`);
+    res.setHeader("Content-Type",  file.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", watermarkedBuffer.length);
+    res.setHeader("X-Watermark-Id", watermarkId);   // exposes ID only, not seed
+    res.setHeader("X-Download-Id",  downloadId);
+
+    logEvent("WATERMARKED_FILE_DOWNLOADED", researcherId, "researcher", file, {
+      status: "success", ipAddress: req.ip,
+      details: { watermarkId, downloadId, fileExt, sizeBytes: watermarkedBuffer.length },
+    }).catch(console.warn);
+
+    return res.send(watermarkedBuffer);
 
   } catch (err) {
     console.error("[downloadFile]", err);
     return res.status(500).json({ success: false, message: "File download failed" });
   }
 };
+
 
 /* -----------------------------------------------------------------
    POST /api/access/request-more-info
